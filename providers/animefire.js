@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio.
+/* AnimeFire provider for Nuvio. v1.0.1
  *
  * Fonte: https://animefire.io (API publica: https://api.animefire.io)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -10,7 +10,11 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var TMDB_API_KEY_DEFAULT = "3fd2be6f0c70a2a598f084ddfb75487c";
+var PROVIDER_VERSION = "1.0.1";
+var TMDB_API_KEYS_DEFAULT = [
+  "3fd2be6f0c70a2a598f084ddfb75487c",
+  "8265bd1679663a7ea12ac168da84d2e8"
+];
 var ANIMEFIRE_API = "https://api.animefire.io";
 var SITE_URL = "https://animefire.io/";
 var DEFAULT_UA =
@@ -25,12 +29,29 @@ function getSettings() {
   return {};
 }
 
-function getTmdbKey() {
+function log(msg) {
+  try {
+    if (typeof console !== "undefined" && console.log) {
+      console.log("[AnimeFire] " + msg);
+    }
+  } catch (e) {}
+}
+
+function getTmdbKeys() {
+  var keys = [];
   var s = getSettings();
   if (s && typeof s.tmdbApiKey === "string" && s.tmdbApiKey.trim() !== "") {
-    return s.tmdbApiKey.trim();
+    keys.push(s.tmdbApiKey.trim());
   }
-  return TMDB_API_KEY_DEFAULT;
+  for (var i = 0; i < TMDB_API_KEYS_DEFAULT.length; i++) {
+    var k = TMDB_API_KEYS_DEFAULT[i];
+    var dup = false;
+    for (var j = 0; j < keys.length; j++) {
+      if (keys[j] === k) dup = true;
+    }
+    if (!dup) keys.push(k);
+  }
+  return keys;
 }
 
 function getPreferredAudio() {
@@ -65,7 +86,7 @@ function safeParseJson(text) {
   }
 }
 
-function fetchJson(url) {
+function fetchJsonOnce(url) {
   return fetch(url, { method: "GET", headers: apiHeaders() })
     .then(function (res) {
       if (!res.ok) return null;
@@ -78,6 +99,13 @@ function fetchJson(url) {
     .catch(function () {
       return null;
     });
+}
+
+function fetchJson(url) {
+  return fetchJsonOnce(url).then(function (first) {
+    if (first !== null && first !== undefined) return first;
+    return fetchJsonOnce(url);
+  });
 }
 
 function uniqueStrings(arr) {
@@ -186,8 +214,26 @@ function fileNameOf(pathOrUrl) {
 
 /* ---------- TMDB ---------- */
 
-function fetchTmdb(tmdbType, id) {
-  var key = getTmdbKey();
+function parseTmdb(tmdbType, j) {
+  if (!j || j.success === false) return null;
+  var titles = [];
+  if (tmdbType === "movie") {
+    if (j.title) titles.push(j.title);
+    if (j.original_title) titles.push(j.original_title);
+  } else {
+    if (j.name) titles.push(j.name);
+    if (j.original_name) titles.push(j.original_name);
+  }
+  titles = uniqueStrings(titles);
+  if (!titles.length) return null;
+  var dateStr = j.first_air_date || j.release_date || "";
+  var year =
+    typeof dateStr === "string" && dateStr.length >= 4 ? dateStr.substr(0, 4) : "";
+  var posterFile = j.poster_path ? fileNameOf(j.poster_path) : "";
+  return { titles: titles, year: year, posterFile: posterFile };
+}
+
+function fetchTmdbWithKey(tmdbType, id, key, lang) {
   var url =
     "https://api.themoviedb.org/3/" +
     tmdbType +
@@ -195,24 +241,33 @@ function fetchTmdb(tmdbType, id) {
     encodeURIComponent(id) +
     "?api_key=" +
     encodeURIComponent(key) +
-    "&language=en-US";
+    "&language=" +
+    encodeURIComponent(lang);
   return fetchJson(url).then(function (j) {
-    if (!j || j.success === false) return null;
-    var titles = [];
-    if (tmdbType === "movie") {
-      if (j.title) titles.push(j.title);
-      if (j.original_title) titles.push(j.original_title);
-    } else {
-      if (j.name) titles.push(j.name);
-      if (j.original_name) titles.push(j.original_name);
-    }
-    titles = uniqueStrings(titles);
-    if (!titles.length) return null;
-    var dateStr = j.first_air_date || j.release_date || "";
-    var year = typeof dateStr === "string" && dateStr.length >= 4 ? dateStr.substr(0, 4) : "";
-    var posterFile = j.poster_path ? fileNameOf(j.poster_path) : "";
-    return { titles: titles, year: year, posterFile: posterFile };
+    return parseTmdb(tmdbType, j);
   });
+}
+
+function fetchTmdb(tmdbType, id) {
+  var keys = getTmdbKeys();
+  var langs = ["en-US", "pt-BR"];
+  var ki = 0;
+  var li = 0;
+  function next() {
+    if (ki >= keys.length) return Promise.resolve(null);
+    var key = keys[ki];
+    var lang = langs[li];
+    return fetchTmdbWithKey(tmdbType, id, key, lang).then(function (r) {
+      if (r) return r;
+      li++;
+      if (li >= langs.length) {
+        li = 0;
+        ki++;
+      }
+      return next();
+    });
+  }
+  return next();
 }
 
 /* ---------- AnimeFire ---------- */
@@ -413,12 +468,20 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
   if (!(episode > 0)) episode = 1;
   var tmdbType = isMovie ? "movie" : "tv";
 
+  log("v" + PROVIDER_VERSION + " req tmdb=" + id + " type=" + mediaType + " s=" + season + " e=" + episode);
   return fetchTmdb(tmdbType, id)
     .then(function (tmdb) {
-      if (!tmdb) return [];
+      if (!tmdb) {
+        log("tmdb sem resposta para " + tmdbType + "/" + id);
+        return [];
+      }
+      log("tmdb ok: " + tmdb.titles.join(" / ") + " (" + tmdb.year + ")");
       var queries = tmdb.titles.slice(0, 3);
       return searchAll(queries).then(function (candidates) {
-        if (!candidates.length) return [];
+        if (!candidates.length) {
+          log("animefire: nenhuma busca retornou resultados");
+          return [];
+        }
         for (var i = 0; i < candidates.length; i++) {
           candidates[i].searchScore = bestTitleScore(
             tmdb.titles,
@@ -443,10 +506,19 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
               best = { data: d.data, episodeId: epId, score: sc };
             }
           }
-          if (!best || !best.episodeId) return [];
+          if (!best || !best.episodeId) {
+            log("sem episodio compativel (s=" + season + " e=" + episode + ")");
+            return [];
+          }
+          log("anime ok score=" + best.score + " ep=" + best.episodeId);
           return fetchEpisode(best.episodeId).then(function (epData) {
-            if (!epData) return [];
-            return buildNuvioStreams(epData, isMovie, season, episode);
+            if (!epData) {
+              log("episodio sem resposta");
+              return [];
+            }
+            var streams = buildNuvioStreams(epData, isMovie, season, episode);
+            log("streams: " + streams.length);
+            return streams;
           });
         });
       });
