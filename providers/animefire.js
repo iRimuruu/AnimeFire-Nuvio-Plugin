@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.0.2
+/* AnimeFire provider for Nuvio. v1.0.3
  *
  * Fonte: https://animefire.io (API publica: https://api.animefire.io)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -10,7 +10,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.0.2";
+var PROVIDER_VERSION = "1.0.3";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -136,12 +136,14 @@ function diagEnabled() {
   return !!(s && s.diagMode === true);
 }
 
-function diagEntry(text) {
+/* O app exibe nome (grande) + quality (pequeno); o diagnostico vai no
+ * quality para ficar visivel, e a mensagem completa no title. */
+function diagEntry(short, full) {
   return {
     name: "AnimeFire DIAG",
-    title: String(text),
+    title: String(full),
     url: SITE_URL,
-    quality: "diag",
+    quality: String(short),
     provider: "animefire",
     format: "mpd",
     headers: streamHeaders()
@@ -510,21 +512,21 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
 
   log("v" + PROVIDER_VERSION + " req tmdb=" + id + " type=" + mediaType + " s=" + season + " e=" + episode);
   var diag = diagEnabled();
-  function doneFail(note) {
+  function doneFail(short, note) {
     log(note);
-    if (diag) return [diagEntry(note)];
+    if (diag) return [diagEntry(short, note)];
     return [];
   }
   return fetchTmdb(tmdbType, id)
     .then(function (tmdb) {
       if (!tmdb) {
-        return doneFail("tmdb sem resposta para " + tmdbType + "/" + id);
+        return doneFail("tmdb-falhou", "tmdb sem resposta para " + tmdbType + "/" + id);
       }
       log("tmdb ok: " + tmdb.titles.join(" / ") + " (" + tmdb.year + ")");
       var queries = tmdb.titles.slice(0, 3);
       return searchAll(queries).then(function (candidates) {
         if (!candidates.length) {
-          return doneFail("tmdb ok (" + tmdb.titles[0] + ") | buscas: 0 resultados");
+          return doneFail("busca-0", "tmdb ok (" + tmdb.titles[0] + ") | buscas: 0 resultados");
         }
         for (var i = 0; i < candidates.length; i++) {
           candidates[i].searchScore = bestTitleScore(
@@ -552,23 +554,27 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
           }
           if (!best || !best.episodeId) {
             return doneFail(
+              "sem-episodio",
               "tmdb ok | " + candidates.length + " resultados" +
-              (best ? " | melhor score=" + best.score + " SEM EPISODIO s=" + season + " e=" + episode : " | sem detalhes") 
+              (best ? " | melhor score=" + best.score + " SEM EPISODIO s=" + season + " e=" + episode : " | sem detalhes")
             );
           }
           log("anime ok score=" + best.score + " ep=" + best.episodeId);
           return fetchEpisode(best.episodeId).then(function (epData) {
             if (!epData) {
-              return doneFail("tmdb ok | ep " + best.episodeId + " SEM RESPOSTA");
+              return doneFail("ep-falhou", "tmdb ok | ep " + best.episodeId + " SEM RESPOSTA");
             }
             var streams = buildNuvioStreams(epData, isMovie, season, episode);
             log("streams: " + streams.length);
             if (!streams.length) {
-              return doneFail("tmdb ok | ep " + best.episodeId + " | 0 audios compativeis");
+              return doneFail("sem-audio", "tmdb ok | ep " + best.episodeId + " | 0 audios compativeis");
             }
             if (diag) {
               streams.unshift(
-                diagEntry("tmdb ok | ep " + best.episodeId + " | " + streams.length + " streams")
+                diagEntry(
+                  "ok-" + streams.length,
+                  "tmdb ok | ep " + best.episodeId + " | " + streams.length + " streams"
+                )
               );
             }
             return streams;
@@ -581,7 +587,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
       try {
         console.error("[AnimeFire] " + msg);
       } catch (e2) {}
-      if (diagEnabled()) return [diagEntry(msg)];
+      if (diagEnabled()) return [diagEntry("erro", msg)];
       return [];
     });
 }
