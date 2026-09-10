@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.0.5
+/* AnimeFire provider for Nuvio. v1.0.6
  *
  * Fonte: https://animefire.io (API publica: https://api.animefire.io)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -10,7 +10,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.0.5";
+var PROVIDER_VERSION = "1.0.6";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -285,33 +285,98 @@ function fetchTmdb(tmdbType, id) {
   var langs = ["en-US", "pt-BR"];
   var ki = 0;
   var li = 0;
+  var webTried = false;
   function next() {
-    if (ki >= keys.length) return Promise.resolve(null);
-    var key = keys[ki];
-    var lang = langs[li];
-    /* Sem retry aqui: falha rapida passa para a proxima chave/idioma,
-     * evitando rajada que piora rate-limit. */
-    return fetchWithTimeout(
-      "https://api.themoviedb.org/3/" +
-        tmdbType +
-        "/" +
-        encodeURIComponent(id) +
-        "?api_key=" +
-        encodeURIComponent(key) +
-        "&language=" +
-        encodeURIComponent(lang)
-    ).then(function (j) {
-      var r = parseTmdb(tmdbType, j);
-      if (r) return r;
-      li++;
-      if (li >= langs.length) {
-        li = 0;
-        ki++;
-      }
-      return next();
-    });
+    if (ki < keys.length) {
+      var key = keys[ki];
+      var lang = langs[li];
+      /* Sem retry aqui: falha rapida passa para a proxima chave/idioma,
+       * evitando rajada que piora rate-limit. */
+      return fetchWithTimeout(
+        "https://api.themoviedb.org/3/" +
+          tmdbType +
+          "/" +
+          encodeURIComponent(id) +
+          "?api_key=" +
+          encodeURIComponent(key) +
+          "&language=" +
+          encodeURIComponent(lang)
+      ).then(function (j) {
+        var r = parseTmdb(tmdbType, j);
+        if (r) return r;
+        li++;
+        if (li >= langs.length) {
+          li = 0;
+          ki++;
+        }
+        return next();
+      });
+    }
+    /* Ultimo recurso: a pagina do TMDB (host diferente da API). */
+    if (!webTried) {
+      webTried = true;
+      log("tmdb api falhou, tentando site");
+      return fetchTmdbWebsite(tmdbType, id);
+    }
+    return Promise.resolve(null);
   }
   return next();
+}
+
+/* Raspa titulo/ano da pagina publica do TMDB (sem precisar de API key). */
+function fetchTmdbWebsite(tmdbType, id) {
+  var url =
+    "https://www.themoviedb.org/" + tmdbType + "/" + encodeURIComponent(id) + "?language=en-US";
+  return fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "text/html,application/xhtml+xml,*/*",
+      "User-Agent": DEFAULT_UA,
+      Referer: "https://www.themoviedb.org/"
+    }
+  })
+    .then(function (res) {
+      if (!res.ok) return null;
+      return res.text();
+    })
+    .then(function (html) {
+      if (!html) return null;
+      return parseTmdbWebsite(String(html));
+    })
+    .catch(function () {
+      return null;
+    });
+}
+
+function parseTmdbWebsite(html) {
+  var title = "";
+  var m =
+    html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i) ||
+    html.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:title"/i);
+  if (m) {
+    title = m[1].trim();
+  } else {
+    var t = html.match(/<title>([\s\S]*?)<\/title>/i);
+    if (t) {
+      title = t[1].replace(/\s+/g, " ").trim();
+      title = title.split(" — ")[0].split(" – ")[0].split(" | ")[0].split(" - ")[0].trim();
+    }
+  }
+  if (!title) return null;
+  var year = "";
+  var y =
+    html.match(/"first_air_date"\s*:\s*"(\d{4})/) ||
+    html.match(/"release_date"\s*:\s*"(\d{4})/) ||
+    html.match(/release_date[^>]*>\s*\(?\s*((?:19|20)\d{2})/i) ||
+    title.match(/\((?:TV Series\s+)?(19\d{2}|20\d{2})\)\s*$/);
+  if (y) year = y[1];
+  title = title
+    .replace(/\s*\((?:TV Series\s+)?(19\d{2}|20\d{2})\)\s*$/, "")
+    .replace(/\s*\((19\d{2}|20\d{2})\)\s*$/, "")
+    .trim();
+  var titles = uniqueStrings([title]);
+  if (!titles.length) return null;
+  return { titles: titles, year: year, posterFile: "" };
 }
 
 /* ---------- AnimeFire ---------- */
