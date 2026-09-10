@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.0.9
+/* AnimeFire provider for Nuvio. v1.1.0
  *
  * Fonte: https://animefire.io (API publica: https://api.animefire.io)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -10,7 +10,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.0.9";
+var PROVIDER_VERSION = "1.1.0";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -352,14 +352,12 @@ function fileNameOf(pathOrUrl) {
 
 function parseTmdb(tmdbType, j) {
   if (!j || j.success === false) return null;
+  /* Aceita campos de filme e serie: o /find pode devolver o outro tipo. */
   var titles = [];
-  if (tmdbType === "movie") {
-    if (j.title) titles.push(j.title);
-    if (j.original_title) titles.push(j.original_title);
-  } else {
-    if (j.name) titles.push(j.name);
-    if (j.original_name) titles.push(j.original_name);
-  }
+  if (j.title) titles.push(j.title);
+  if (j.name) titles.push(j.name);
+  if (j.original_title) titles.push(j.original_title);
+  if (j.original_name) titles.push(j.original_name);
   titles = uniqueStrings(titles);
   if (!titles.length) return null;
   var dateStr = j.first_air_date || j.release_date || "";
@@ -369,7 +367,48 @@ function parseTmdb(tmdbType, j) {
   return { titles: titles, year: year, posterFile: posterFile };
 }
 
+function isImdbId(s) {
+  return /^tt\d+$/i.test(String(s == null ? "" : s).trim());
+}
+
+function pickFindResult(tmdbType, j) {
+  if (!j || typeof j !== "object") return null;
+  var primary = tmdbType === "movie" ? j.movie_results : j.tv_results;
+  if (Array.isArray(primary) && primary.length) return primary[0];
+  var secondary = tmdbType === "movie" ? j.tv_results : j.movie_results;
+  if (Array.isArray(secondary) && secondary.length) return secondary[0];
+  return null;
+}
+
+/* Converte ID do IMDB (tt...) em dados TMDB via /find. */
+function fetchTmdbByImdb(tmdbType, imdbId, notes) {
+  var keys = getTmdbKeys();
+  var ki = 0;
+  function next() {
+    if (ki >= keys.length) return Promise.resolve(null);
+    var myKi = ki;
+    return fetchNote(
+      "https://api.themoviedb.org/3/find/" +
+        encodeURIComponent(imdbId) +
+        "?api_key=" +
+        encodeURIComponent(keys[ki]) +
+        "&external_source=imdb_id&language=en-US"
+    ).then(function (r) {
+      var parsed = parseTmdb(tmdbType, pickFindResult(tmdbType, r.data));
+      if (parsed) return parsed;
+      if (notes) notes.push("imdb-k" + myKi + "-" + r.note);
+      ki++;
+      return next();
+    });
+  }
+  return next();
+}
+
 function fetchTmdb(tmdbType, id, notes) {
+  if (isImdbId(id)) {
+    log("id IMDB detectado, convertendo via /find");
+    return fetchTmdbByImdb(tmdbType, String(id).trim(), notes);
+  }
   var keys = getTmdbKeys();
   var langs = ["en-US", "pt-BR"];
   var ki = 0;
