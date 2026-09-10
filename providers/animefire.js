@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.0.6
+/* AnimeFire provider for Nuvio. v1.0.7
  *
  * Fonte: https://animefire.io (API publica: https://api.animefire.io)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -10,7 +10,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.0.6";
+var PROVIDER_VERSION = "1.0.7";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -133,6 +133,49 @@ function fetchWithTimeout(url) {
       if (r !== null && r !== undefined && timer) clearTimeout(timer);
     } catch (e2) {}
     return r;
+  });
+}
+
+/* Sonda de conectividade: testa 4 hosts de dentro do app e resume em
+ * "T0W0A1J1" (1=ok, 0=falha). T=api TMDB, W=site TMDB, A=api AnimeFire,
+ * J=espelho jsDelivr (controle: esse o app ja alcanca). */
+function probeOne(url) {
+  var attempt = fetch(url, { method: "GET", headers: apiHeaders() })
+    .then(function (res) {
+      return res && res.ok ? 1 : 0;
+    })
+    .catch(function () {
+      return 0;
+    });
+  try {
+    if (typeof setTimeout === "function") {
+      var timeoutP = new Promise(function (resolve) {
+        setTimeout(function () {
+          resolve(0);
+        }, 10000);
+      });
+      return Promise.race([attempt, timeoutP]);
+    }
+  } catch (e) {}
+  return attempt;
+}
+
+function probeNet() {
+  return Promise.all([
+    probeOne(
+      "https://api.themoviedb.org/3/tv/82684?api_key=" +
+        encodeURIComponent(TMDB_API_KEYS_DEFAULT[0]) +
+        "&language=en-US"
+    ),
+    probeOne("https://www.themoviedb.org/tv/82684?language=en-US"),
+    probeOne(ANIMEFIRE_API + "/animes/pesquisar?q=slime&v=2"),
+    probeOne(
+      "https://cdn.jsdelivr.net/gh/iRimuruu/AnimeFire-Nuvio-Plugin@main/manifest.json"
+    )
+  ]).then(function (r) {
+    return (
+      "T" + (r[0] ? 1 : 0) + "W" + (r[1] ? 1 : 0) + "A" + (r[2] ? 1 : 0) + "J" + (r[3] ? 1 : 0)
+    );
   });
 }
 
@@ -589,8 +632,17 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
     .then(function (tmdb) {
       if (!tmdb) {
         var keyNote = customKey ? "chave personalizada recebida" : "chave personalizada NAO recebida";
-        var short = customKey ? "tmdb-falhou+chave" : "tmdb-falhou";
-        return doneFail(short, "tmdb sem resposta para " + tmdbType + "/" + id + " (" + keyNote + ")");
+        if (!diag) {
+          log("tmdb sem resposta para " + tmdbType + "/" + id + " (" + keyNote + ")");
+          return [];
+        }
+        return probeNet().then(function (map) {
+          var note =
+            "tmdb sem resposta (" + keyNote + ") | rede " + map +
+            " (T=api tmdb, W=site tmdb, A=api animefire, J=espelho)";
+          log(note);
+          return [diagEntry("net-" + map, note)];
+        });
       }
       log("tmdb ok: " + tmdb.titles.join(" / ") + " (" + tmdb.year + ")");
       var queries = tmdb.titles.slice(0, 3);

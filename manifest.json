@@ -1,12 +1,12 @@
 {
   "name": "AnimeFire",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "scrapers": [
     {
       "id": "animefire",
       "name": "AnimeFire",
       "description": "AnimeFire (animefire.io) — animes dublados e legendados em PT-BR via DASH.",
-      "version": "1.0.6",
+      "version": "1.0.7",
       "author": "AnimeFire-Nuvio",
       "supportedTypes": ["movie", "tv"],
       "filename": "providers/animefire.js",
