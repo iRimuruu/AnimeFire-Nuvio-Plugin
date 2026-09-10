@@ -1,0 +1,20 @@
+{
+  "name": "AnimeFire",
+  "version": "1.0.0",
+  "scrapers": [
+    {
+      "id": "animefire",
+      "name": "AnimeFire",
+      "description": "AnimeFire (animefire.io) — animes dublados e legendados em PT-BR via DASH.",
+      "version": "1.0.0",
+      "author": "AnimeFire-Nuvio",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/animefire.js",
+      "enabled": true,
+      "hasSettings": true,
+      "formats": ["mpd", "mp4"],
+      "logo": "https://animefire.io/favicons/favicon.ico",
+      "contentLanguage": ["pt-BR", "pt"]
+    }
+  ]
+}
