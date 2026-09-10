@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.0.1
+/* AnimeFire provider for Nuvio. v1.0.2
  *
  * Fonte: https://animefire.io (API publica: https://api.animefire.io)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -10,7 +10,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.0.1";
+var PROVIDER_VERSION = "1.0.2";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -102,10 +102,50 @@ function fetchJsonOnce(url) {
 }
 
 function fetchJson(url) {
-  return fetchJsonOnce(url).then(function (first) {
+  return fetchWithTimeout(url).then(function (first) {
     if (first !== null && first !== undefined) return first;
-    return fetchJsonOnce(url);
+    return fetchWithTimeout(url);
   });
+}
+
+/* Limita cada tentativa a 15s para uma requisicao travada nao comer o tempo
+ * total do plugin. Se o runtime nao tiver setTimeout, segue sem limite. */
+function fetchWithTimeout(url) {
+  var attempt = fetchJsonOnce(url);
+  try {
+    if (typeof setTimeout !== "function") return attempt;
+  } catch (e) {
+    return attempt;
+  }
+  var timer;
+  var timeoutP = new Promise(function (resolve) {
+    timer = setTimeout(function () {
+      resolve(null);
+    }, 15000);
+  });
+  return Promise.race([attempt, timeoutP]).then(function (r) {
+    try {
+      if (r !== null && r !== undefined && timer) clearTimeout(timer);
+    } catch (e2) {}
+    return r;
+  });
+}
+
+function diagEnabled() {
+  var s = getSettings();
+  return !!(s && s.diagMode === true);
+}
+
+function diagEntry(text) {
+  return {
+    name: "AnimeFire DIAG",
+    title: String(text),
+    url: SITE_URL,
+    quality: "diag",
+    provider: "animefire",
+    format: "mpd",
+    headers: streamHeaders()
+  };
 }
 
 function uniqueStrings(arr) {
@@ -469,18 +509,22 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
   var tmdbType = isMovie ? "movie" : "tv";
 
   log("v" + PROVIDER_VERSION + " req tmdb=" + id + " type=" + mediaType + " s=" + season + " e=" + episode);
+  var diag = diagEnabled();
+  function doneFail(note) {
+    log(note);
+    if (diag) return [diagEntry(note)];
+    return [];
+  }
   return fetchTmdb(tmdbType, id)
     .then(function (tmdb) {
       if (!tmdb) {
-        log("tmdb sem resposta para " + tmdbType + "/" + id);
-        return [];
+        return doneFail("tmdb sem resposta para " + tmdbType + "/" + id);
       }
       log("tmdb ok: " + tmdb.titles.join(" / ") + " (" + tmdb.year + ")");
       var queries = tmdb.titles.slice(0, 3);
       return searchAll(queries).then(function (candidates) {
         if (!candidates.length) {
-          log("animefire: nenhuma busca retornou resultados");
-          return [];
+          return doneFail("tmdb ok (" + tmdb.titles[0] + ") | buscas: 0 resultados");
         }
         for (var i = 0; i < candidates.length; i++) {
           candidates[i].searchScore = bestTitleScore(
@@ -507,26 +551,37 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
             }
           }
           if (!best || !best.episodeId) {
-            log("sem episodio compativel (s=" + season + " e=" + episode + ")");
-            return [];
+            return doneFail(
+              "tmdb ok | " + candidates.length + " resultados" +
+              (best ? " | melhor score=" + best.score + " SEM EPISODIO s=" + season + " e=" + episode : " | sem detalhes") 
+            );
           }
           log("anime ok score=" + best.score + " ep=" + best.episodeId);
           return fetchEpisode(best.episodeId).then(function (epData) {
             if (!epData) {
-              log("episodio sem resposta");
-              return [];
+              return doneFail("tmdb ok | ep " + best.episodeId + " SEM RESPOSTA");
             }
             var streams = buildNuvioStreams(epData, isMovie, season, episode);
             log("streams: " + streams.length);
+            if (!streams.length) {
+              return doneFail("tmdb ok | ep " + best.episodeId + " | 0 audios compativeis");
+            }
+            if (diag) {
+              streams.unshift(
+                diagEntry("tmdb ok | ep " + best.episodeId + " | " + streams.length + " streams")
+              );
+            }
             return streams;
           });
         });
       });
     })
     .catch(function (e) {
+      var msg = "erro interno: " + ((e && e.message) || e);
       try {
-        console.error("[AnimeFire] " + ((e && e.message) || e));
+        console.error("[AnimeFire] " + msg);
       } catch (e2) {}
+      if (diagEnabled()) return [diagEntry(msg)];
       return [];
     });
 }
@@ -555,6 +610,13 @@ function onSettings() {
         { label: "Somente Legendado", value: "legendado" }
       ],
       defaultValue: "both"
+    },
+    {
+      type: "toggle",
+      key: "diagMode",
+      label: "Modo diagnostico",
+      description: "Mostra na lista de fontes em que etapa a busca parou. Desative depois de testar.",
+      defaultValue: false
     }
   ];
 }
