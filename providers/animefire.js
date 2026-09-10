@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.0.4
+/* AnimeFire provider for Nuvio. v1.0.5
  *
  * Fonte: https://animefire.io (API publica: https://api.animefire.io)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -10,7 +10,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.0.4";
+var PROVIDER_VERSION = "1.0.5";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -35,6 +35,11 @@ function log(msg) {
       console.log("[AnimeFire] " + msg);
     }
   } catch (e) {}
+}
+
+function hasCustomKey() {
+  var s = getSettings();
+  return !!(s && typeof s.tmdbApiKey === "string" && s.tmdbApiKey.trim() !== "");
 }
 
 function getTmdbKeys() {
@@ -509,6 +514,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
 
   log("v" + PROVIDER_VERSION + " req tmdb=" + id + " type=" + mediaType + " s=" + season + " e=" + episode);
   var diag = diagEnabled();
+  var customKey = hasCustomKey();
   function doneFail(short, note) {
     log(note);
     if (diag) return [diagEntry(short, note)];
@@ -517,7 +523,9 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
   return fetchTmdb(tmdbType, id)
     .then(function (tmdb) {
       if (!tmdb) {
-        return doneFail("tmdb-falhou", "tmdb sem resposta para " + tmdbType + "/" + id);
+        var keyNote = customKey ? "chave personalizada recebida" : "chave personalizada NAO recebida";
+        var short = customKey ? "tmdb-falhou+chave" : "tmdb-falhou";
+        return doneFail(short, "tmdb sem resposta para " + tmdbType + "/" + id + " (" + keyNote + ")");
       }
       log("tmdb ok: " + tmdb.titles.join(" / ") + " (" + tmdb.year + ")");
       var queries = tmdb.titles.slice(0, 3);
