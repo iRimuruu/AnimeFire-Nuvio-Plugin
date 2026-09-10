@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.0.7
+/* AnimeFire provider for Nuvio. v1.0.8
  *
  * Fonte: https://animefire.io (API publica: https://api.animefire.io)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -10,7 +10,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.0.7";
+var PROVIDER_VERSION = "1.0.8";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -134,6 +134,52 @@ function fetchWithTimeout(url) {
     } catch (e2) {}
     return r;
   });
+}
+
+/* Fetch que relata o motivo: {data, note} onde note e um de:
+ * "ok", "http<status>", "timeout", "erro-rede", "json-invalido". */
+function fetchNote(url, headers, raw) {
+  var timedOut = false;
+  var timer = null;
+  try {
+    if (typeof setTimeout === "function" && typeof clearTimeout === "function") {
+      timer = setTimeout(function () {
+        timedOut = true;
+      }, 15000);
+    }
+  } catch (e) {}
+  function clear() {
+    try {
+      if (timer) clearTimeout(timer);
+    } catch (e2) {}
+  }
+  var attempt = fetch(url, { method: "GET", headers: headers || apiHeaders() })
+    .then(function (res) {
+      if (!res || !res.ok) {
+        clear();
+        return { data: null, note: "http" + ((res && res.status) || 0) };
+      }
+      return res.text().then(function (text) {
+        clear();
+        if (!text) return { data: null, note: "vazio" };
+        if (raw) return { data: String(text), note: "ok" };
+        var j = safeParseJson(text);
+        return { data: j, note: j ? "ok" : "json-invalido" };
+      });
+    })
+    .catch(function () {
+      clear();
+      return { data: null, note: timedOut ? "timeout" : "erro-rede" };
+    });
+  if (timer) {
+    var timeoutP = new Promise(function (resolve) {
+      setTimeout(function () {
+        resolve({ data: null, note: "timeout" });
+      }, 15000);
+    });
+    return Promise.race([attempt, timeoutP]);
+  }
+  return attempt;
 }
 
 /* Sonda de conectividade: testa 4 hosts de dentro do app e resume em
@@ -323,7 +369,7 @@ function parseTmdb(tmdbType, j) {
   return { titles: titles, year: year, posterFile: posterFile };
 }
 
-function fetchTmdb(tmdbType, id) {
+function fetchTmdb(tmdbType, id, notes) {
   var keys = getTmdbKeys();
   var langs = ["en-US", "pt-BR"];
   var ki = 0;
@@ -333,9 +379,10 @@ function fetchTmdb(tmdbType, id) {
     if (ki < keys.length) {
       var key = keys[ki];
       var lang = langs[li];
+      var myKi = ki;
       /* Sem retry aqui: falha rapida passa para a proxima chave/idioma,
        * evitando rajada que piora rate-limit. */
-      return fetchWithTimeout(
+      return fetchNote(
         "https://api.themoviedb.org/3/" +
           tmdbType +
           "/" +
@@ -344,9 +391,10 @@ function fetchTmdb(tmdbType, id) {
           encodeURIComponent(key) +
           "&language=" +
           encodeURIComponent(lang)
-      ).then(function (j) {
-        var r = parseTmdb(tmdbType, j);
-        if (r) return r;
+      ).then(function (r) {
+        var parsed = parseTmdb(tmdbType, r.data);
+        if (parsed) return parsed;
+        if (notes) notes.push("k" + myKi + "-" + r.note);
         li++;
         if (li >= langs.length) {
           li = 0;
@@ -359,7 +407,7 @@ function fetchTmdb(tmdbType, id) {
     if (!webTried) {
       webTried = true;
       log("tmdb api falhou, tentando site");
-      return fetchTmdbWebsite(tmdbType, id);
+      return fetchTmdbWebsite(tmdbType, id, notes);
     }
     return Promise.resolve(null);
   }
@@ -367,28 +415,21 @@ function fetchTmdb(tmdbType, id) {
 }
 
 /* Raspa titulo/ano da pagina publica do TMDB (sem precisar de API key). */
-function fetchTmdbWebsite(tmdbType, id) {
+function fetchTmdbWebsite(tmdbType, id, notes) {
   var url =
     "https://www.themoviedb.org/" + tmdbType + "/" + encodeURIComponent(id) + "?language=en-US";
-  return fetch(url, {
-    method: "GET",
-    headers: {
-      Accept: "text/html,application/xhtml+xml,*/*",
-      "User-Agent": DEFAULT_UA,
-      Referer: "https://www.themoviedb.org/"
+  return fetchNote(url, {
+    Accept: "text/html,application/xhtml+xml,*/*",
+    "User-Agent": DEFAULT_UA,
+    Referer: "https://www.themoviedb.org/"
+  }, true).then(function (r) {
+    if (r.data && typeof r.data === "string") {
+      var parsed = parseTmdbWebsite(r.data);
+      if (parsed) return parsed;
     }
-  })
-    .then(function (res) {
-      if (!res.ok) return null;
-      return res.text();
-    })
-    .then(function (html) {
-      if (!html) return null;
-      return parseTmdbWebsite(String(html));
-    })
-    .catch(function () {
-      return null;
-    });
+    if (notes) notes.push("site-" + r.note);
+    return null;
+  });
 }
 
 function parseTmdbWebsite(html) {
@@ -623,12 +664,13 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
   log("v" + PROVIDER_VERSION + " req tmdb=" + id + " type=" + mediaType + " s=" + season + " e=" + episode);
   var diag = diagEnabled();
   var customKey = hasCustomKey();
+  var notes = [];
   function doneFail(short, note) {
     log(note);
     if (diag) return [diagEntry(short, note)];
     return [];
   }
-  return fetchTmdb(tmdbType, id)
+  return fetchTmdb(tmdbType, id, notes)
     .then(function (tmdb) {
       if (!tmdb) {
         var keyNote = customKey ? "chave personalizada recebida" : "chave personalizada NAO recebida";
@@ -638,10 +680,14 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
         }
         return probeNet().then(function (map) {
           var note =
-            "tmdb sem resposta (" + keyNote + ") | rede " + map +
+            "tmdb sem resposta (" + keyNote + ") | tentativas " + notes.join(",") +
+            " | rede " + map +
             " (T=api tmdb, W=site tmdb, A=api animefire, J=espelho)";
           log(note);
-          return [diagEntry("net-" + map, note)];
+          return [
+            diagEntry("tent-" + notes.join(",").slice(0, 40), note),
+            diagEntry("net-" + map, note)
+          ];
         });
       }
       log("tmdb ok: " + tmdb.titles.join(" / ") + " (" + tmdb.year + ")");
