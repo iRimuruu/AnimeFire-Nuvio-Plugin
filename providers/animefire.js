@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.0.3
+/* AnimeFire provider for Nuvio. v1.0.4
  *
  * Fonte: https://animefire.io (API publica: https://api.animefire.io)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -10,7 +10,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.0.3";
+var PROVIDER_VERSION = "1.0.4";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -275,21 +275,6 @@ function parseTmdb(tmdbType, j) {
   return { titles: titles, year: year, posterFile: posterFile };
 }
 
-function fetchTmdbWithKey(tmdbType, id, key, lang) {
-  var url =
-    "https://api.themoviedb.org/3/" +
-    tmdbType +
-    "/" +
-    encodeURIComponent(id) +
-    "?api_key=" +
-    encodeURIComponent(key) +
-    "&language=" +
-    encodeURIComponent(lang);
-  return fetchJson(url).then(function (j) {
-    return parseTmdb(tmdbType, j);
-  });
-}
-
 function fetchTmdb(tmdbType, id) {
   var keys = getTmdbKeys();
   var langs = ["en-US", "pt-BR"];
@@ -299,7 +284,19 @@ function fetchTmdb(tmdbType, id) {
     if (ki >= keys.length) return Promise.resolve(null);
     var key = keys[ki];
     var lang = langs[li];
-    return fetchTmdbWithKey(tmdbType, id, key, lang).then(function (r) {
+    /* Sem retry aqui: falha rapida passa para a proxima chave/idioma,
+     * evitando rajada que piora rate-limit. */
+    return fetchWithTimeout(
+      "https://api.themoviedb.org/3/" +
+        tmdbType +
+        "/" +
+        encodeURIComponent(id) +
+        "?api_key=" +
+        encodeURIComponent(key) +
+        "&language=" +
+        encodeURIComponent(lang)
+    ).then(function (j) {
+      var r = parseTmdb(tmdbType, j);
       if (r) return r;
       li++;
       if (li >= langs.length) {

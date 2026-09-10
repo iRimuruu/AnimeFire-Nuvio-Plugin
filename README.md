@@ -62,6 +62,11 @@ Dentro do Nuvio, nos ajustes do plugin **AnimeFire**, você encontra:
 
 **O app diz que o repositório é inválido**
 - Confira se o endereço foi colado por completo, sem espaços no início ou no fim.
+- Se a rede bloquear o GitHub, use o endereço espelho:
+  `https://cdn.jsdelivr.net/gh/iRimuruu/AnimeFire-Nuvio-Plugin@main/manifest.json`
+
+**Nenhum episódio aparece em anime nenhum**
+- O plugin usa uma chave pública do TMDB que às vezes atinge o limite em certas redes. Crie uma chave gratuita em [themoviedb.org](https://www.themoviedb.org/) (crie a conta, confirme o e-mail, vá em Configurações → API → crie uma chave) e cole o código de 32 letras e números no ajuste **TMDB API Key** do plugin.
 
 ## Aviso
 
