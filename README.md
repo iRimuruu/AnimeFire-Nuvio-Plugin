@@ -28,10 +28,14 @@ Este repositório é um plugin para o [Nuvio](https://nuvio.tv/) — um app grat
 3. Toque em **Adicionar repositório**.
 4. Cole este endereço:
    ```
-   https://raw.githubusercontent.com/iRimuruu/AnimeFire-Nuvio-Plugin/main/manifest.json
+   https://cdn.jsdelivr.net/gh/iRimuruu/AnimeFire-Nuvio-Plugin@main/manifest.json
    ```
+   (Se der erro de repositório inválido, tente o endereço alternativo:
+   `https://raw.githubusercontent.com/iRimuruu/AnimeFire-Nuvio-Plugin/main/manifest.json`)
 5. Confirme e atualize a lista de provedores.
 6. Ative o **AnimeFire** na lista.
+
+> Depois de atualizações do plugin, o app pode demorar a puxar a versão nova (cache). Se isso acontecer, remova o repositório e adicione de novo.
 
 Pronto. Agora é só buscar um anime no Nuvio e dar play — as opções de dublado e legendado aparecem na hora de escolher a fonte.
 
@@ -48,7 +52,8 @@ Dentro do Nuvio, nos ajustes do plugin **AnimeFire**, você encontra:
 | Opção | O que faz |
 |---|---|
 | Áudio preferido | Mostra só dublado, só legendado ou os dois (padrão: os dois) |
-| TMDB API Key | Só mexa aqui se as buscas pararem de funcionar um dia — o plugin já vem com uma chave pronta |
+| TMDB API Key | Só mexa aqui se nenhum episódio aparecer em anime nenhum — crie uma chave grátis em [themoviedb.org](https://www.themoviedb.org/) (Configurações → API) e cole aqui |
+| Modo diagnostico | Mostra na lista de fontes onde a busca parou (ex.: `tmdb-falhou`, `sem-episodio`). Use só para diagnosticar e desative depois |
 
 ## Problemas comuns
 
