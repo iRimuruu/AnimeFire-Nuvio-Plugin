@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.0.8
+/* AnimeFire provider for Nuvio. v1.0.9
  *
  * Fonte: https://animefire.io (API publica: https://api.animefire.io)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -10,7 +10,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.0.8";
+var PROVIDER_VERSION = "1.0.9";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -664,7 +664,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
   log("v" + PROVIDER_VERSION + " req tmdb=" + id + " type=" + mediaType + " s=" + season + " e=" + episode);
   var diag = diagEnabled();
   var customKey = hasCustomKey();
-  var notes = [];
+  var notes = [tmdbType + "/" + id + "-s" + season + "e" + episode];
   function doneFail(short, note) {
     log(note);
     if (diag) return [diagEntry(short, note)];
