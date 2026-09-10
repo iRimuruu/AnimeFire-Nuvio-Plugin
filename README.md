@@ -1,52 +1,72 @@
 # AnimeFire para Nuvio
 
-Plugin (manifesto + scraper local) que leva o **AnimeFire** (`animefire.io`) para o **Nuvio** (`nuvio.tv`).
+Assista aos animes do **AnimeFire** diretamente no app **Nuvio**, com a sua lista, progresso e legendas organizados em um só lugar.
 
-- Filmes e series de anime, **dublado e legendado (PT-BR)**
-- Streams **DASH** (`format: "mpd"`, ex.: dublado 1080p) com headers de playback
-- Mapeamento automatico **TMDB -> AnimeFire** (titulo + ano + poster)
+## O que é
 
-## Arquivos
+Este repositório é um plugin para o [Nuvio](https://nuvio.tv/) — um app gratuito e de código aberto para organizar e assistir seus filmes e séries. O plugin conecta o catálogo do [AnimeFire](https://animefire.io/) ao Nuvio, então você encontra os episódios dublados e legendados sem sair do app.
 
-```
-manifest.json
-providers/animefire.js
-test_animefire.js
-```
+## O que você ganha
 
-## Como funciona
+- 🗣️ Animes **dublados e legendados** em português
+- 🎬 Filmes e séries de anime
+- 📺 Qualidades até **1080p** (quando disponível na fonte)
+- 🔄 Progresso salvo: continue de onde parou em qualquer aparelho
+- ⭐ Favoritos, listas e histórico do Nuvio funcionando normalmente
 
-1. O Nuvio chama `getStreams(tmdbId, mediaType, season, episode)`.
-2. O provider busca o titulo no TMDB (`/3/{tv|movie}/{id}`).
-3. Pesquisa no AnimeFire (`api.animefire.io/animes/pesquisar?q=...`).
-4. Abre o anime (`/anime/{id}`), casa temporada/episodio, abre o episodio (`/episode/{id}`).
-5. Devolve 1 stream por audio (dublado/legendado) apontando para o manifesto DASH.
+## O que você precisa
 
-## Testar local
+- O app **Nuvio** instalado (Android, iPhone, Android TV, Windows, macOS, Linux ou Smart TV)
+- Internet para buscar os episódios
 
-```bash
-node test_animefire.js
-```
+> O Nuvio não hospeda nenhum vídeo — ele organiza e reproduz o conteúdo das fontes que você adiciona. Este plugin é mantido pela comunidade e não tem vínculo oficial com o AnimeFire nem com o Nuvio.
 
-Esperado: 2 streams para Slime S01E01 (`82684`), Suzume (`916224`) e Jujutsu S01E01 (`95479`).
+## Como instalar
 
-## Instalar no Nuvio
+1. Abra o app **Nuvio**.
+2. Vá em **Configurações → Plugins** (em algumas versões aparece como **Scrapers locais**).
+3. Toque em **Adicionar repositório**.
+4. Cole este endereço:
+   ```
+   https://raw.githubusercontent.com/iRimuruu/AnimeFire-Nuvio-Plugin/main/manifest.json
+   ```
+5. Confirme e atualize a lista de provedores.
+6. Ative o **AnimeFire** na lista.
 
-1. Suba esta pasta para um repositório público no GitHub (ex.: `seu-user/animefire-nuvio`).
-2. No app Nuvio: **Configurações → Plugins** (ou **Scrapers locais**) → **Adicionar repositório**.
-3. Cole a URL raw do manifesto:
-   `https://raw.githubusercontent.com/seu-user/animefire-nuvio/main/manifest.json`
-4. Atualize, ative o **AnimeFire** e dê play em qualquer anime.
+Pronto. Agora é só buscar um anime no Nuvio e dar play — as opções de dublado e legendado aparecem na hora de escolher a fonte.
 
-## Configurações (no Nuvio)
+## Como usar
 
-O provider tem tela de ajustes (`hasSettings`):
+- Procure o anime normalmente pela lupa do Nuvio.
+- Na tela de reprodução, escolha entre as fontes **AnimeFire dublado** ou **AnimeFire legendado**.
+- Se um episódio falhar, tente a outra opção de áudio ou aguarde alguns minutos e tente de novo.
 
-- **TMDB API Key** — opcional; só preencha se a chave embutida parar de funcionar (pegue em themoviedb.org).
-- **Áudio preferido** — `both` (padrão), `dublado` ou `legendado`.
+## Ajustes do plugin
 
-## Notas
+Dentro do Nuvio, nos ajustes do plugin **AnimeFire**, você encontra:
 
-- O AnimeFire entrega DASH (`application/dash+xml` via `akumast.net`). O Nuvio/ExoPlayer detecta pelo `format: "mpd"` e pelo probe do content-type.
-- Headers de playback enviados: `Referer: https://animefire.io/`, `Origin: https://animefire.io`.
-- Código Hermes-safe (só `Promise.then`, sem `async/await`), testado em Node 24.
+| Opção | O que faz |
+|---|---|
+| Áudio preferido | Mostra só dublado, só legendado ou os dois (padrão: os dois) |
+| TMDB API Key | Só mexa aqui se as buscas pararem de funcionar um dia — o plugin já vem com uma chave pronta |
+
+## Problemas comuns
+
+**Não aparece nenhum episódio**
+- Confira se o plugin está ativado na lista de provedores.
+- Verifique sua conexão com a internet e tente novamente.
+
+**Um episódio específico não carrega**
+- Troque entre dublado e legendado.
+- O episódio pode ainda não estar disponível na fonte — tente mais tarde.
+
+**O app diz que o repositório é inválido**
+- Confira se o endereço foi colado por completo, sem espaços no início ou no fim.
+
+## Aviso
+
+Projeto feito para fins educacionais. Todo o conteúdo pertence aos seus respectivos donos — este repositório só indica onde o app pode encontrar os episódios. Use de acordo com as leis do seu país.
+
+## Licença
+
+Distribuído sob a licença [GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.html).
