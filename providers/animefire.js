@@ -1,22 +1,28 @@
-/* AnimeFire provider for Nuvio. v1.1.0
+/* AnimeFire provider for Nuvio. v1.2.0
  *
- * Fonte: https://animefire.io (API publica: https://api.animefire.io)
+ * Fonte: https://animefire.one (API publica: https://api.animefire.one)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
  * - Pesquisa no AnimeFire (/animes/pesquisar?q=...).
  * - Resolve o episodio (/anime/{id} -> /episode/{episodeId}).
  * - Devolve os manifests DASH (akumast.net, content-type application/dash+xml)
  *   como streams com format "mpd" (ExoPlayer/mpv resolvem via probe + mime).
  *
+ * v1.2.0: migracao animefire.io -> animefire.one (api.animefire.io com DNS
+ * morto, NXDOMAIN) + suporte ao payload novo de /animes/pesquisar que
+ * devolve titles:{BR,JP} em vez de title:string. IDs agora sao hashes
+ * alfanumericos de 11 chars.
+ *
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.1.0";
+var PROVIDER_VERSION = "1.2.0";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
 ];
-var ANIMEFIRE_API = "https://api.animefire.io";
-var SITE_URL = "https://animefire.io/";
+var ANIMEFIRE_API = "https://api.animefire.one";
+var SITE_URL = "https://animefire.one/";
+var SITE_ORIGIN = "https://animefire.one";
 var DEFAULT_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
@@ -71,15 +77,22 @@ function apiHeaders() {
     Accept: "application/json, text/plain, */*",
     "User-Agent": DEFAULT_UA,
     Referer: SITE_URL,
-    Origin: "https://animefire.io"
+    Origin: SITE_ORIGIN
   };
 }
 
 function streamHeaders() {
   return {
     Referer: SITE_URL,
-    Origin: "https://animefire.io",
+    Origin: SITE_ORIGIN,
     "User-Agent": DEFAULT_UA
+  };
+}
+
+function streamBehaviorHints() {
+  return {
+    notWebReady: false,
+    proxyHeaders: { request: streamHeaders() }
   };
 }
 
@@ -240,7 +253,8 @@ function diagEntry(short, full) {
     quality: String(short),
     provider: "animefire",
     format: "mpd",
-    headers: streamHeaders()
+    headers: streamHeaders(),
+    behaviorHints: streamBehaviorHints()
   };
 }
 
@@ -318,6 +332,30 @@ function bestTitleScore(titles, candidate) {
   for (var i = 0; i < titles.length; i++) {
     var s = titleScore(titles[i], candidate);
     if (s > best) best = s;
+  }
+  return best;
+}
+
+/* Todas as variantes de titulo de um candidato para scoring: usa o array
+ * titles[] quando presente (formato novo), com fallback para title. */
+function candidateTitles(c) {
+  if (!c) return [];
+  if (Array.isArray(c.titles) && c.titles.length) return c.titles;
+  if (c.title) return [String(c.title)];
+  return [];
+}
+
+function candidateSearchScore(tmdbTitles, c) {
+  var variants = candidateTitles(c);
+  var best = 0;
+  for (var i = 0; i < variants.length; i++) {
+    var s = bestTitleScore(tmdbTitles, variants[i]);
+    if (s > best) best = s;
+  }
+  /* Compat: compara tambem o display concatenado (cobre "BR / JP"). */
+  if (variants.length > 1) {
+    var s2 = bestTitleScore(tmdbTitles, variants.join(" "));
+    if (s2 > best) best = s2;
   }
   return best;
 }
@@ -504,6 +542,27 @@ function parseTmdbWebsite(html) {
 
 /* ---------- AnimeFire ---------- */
 
+/* Extrai titulos do item de /animes/pesquisar. Formato novo (>=2026):
+ * {id, titles:{BR,JP}, audio, poster_src, ...}. Formato legado:
+ * {id, title:string, ...}. Devolve {title, titles[]} onde title e o
+ * display (BR > JP > legado) e titles[] contem todas as variantes. */
+function searchItemTitles(it) {
+  var br = "";
+  var jp = "";
+  var legacy = "";
+  if (it) {
+    if (it.titles && typeof it.titles === "object") {
+      if (it.titles.BR) br = String(it.titles.BR);
+      if (it.titles.JP) jp = String(it.titles.JP);
+    }
+    if (it.title && typeof it.title === "string") legacy = String(it.title);
+  }
+  var title = br || jp || legacy || "";
+  var titles = uniqueStrings([br, jp, legacy]);
+  if (!titles.length && title) titles = [title];
+  return { title: title, titles: titles };
+}
+
 function searchOne(query) {
   var url = ANIMEFIRE_API + "/animes/pesquisar?q=" + encodeURIComponent(query) + "&v=2";
   return fetchJson(url).then(function (j) {
@@ -513,9 +572,12 @@ function searchOne(query) {
     for (var i = 0; i < data.length; i++) {
       var it = data[i];
       if (!it || !it.id) continue;
+      var tt = searchItemTitles(it);
+      if (!tt.title) continue;
       out.push({
         id: String(it.id),
-        title: String(it.title || ""),
+        title: tt.title,
+        titles: tt.titles,
         published_at: it.published_at || "",
         poster_src: it.poster_src || ""
       });
@@ -679,7 +741,8 @@ function buildNuvioStreams(epData, isMovie, season, episode) {
       quality: q,
       provider: "animefire",
       format: "mpd",
-      headers: streamHeaders()
+      headers: streamHeaders(),
+      behaviorHints: streamBehaviorHints()
     });
   }
   out.sort(function (a, b) {
@@ -693,7 +756,10 @@ function buildNuvioStreams(epData, isMovie, season, episode) {
 function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
   var id = String(tmdbId == null ? "" : tmdbId).trim();
   if (!id) return Promise.resolve([]);
-  var isMovie = mediaType === "movie";
+  /* O Nuvio moderno tambem pode passar "anime"/"series": anime e tratado
+   * como tv para fins de TMDB e de matching no AnimeFire. */
+  var normMedia = mediaType === "anime" || mediaType === "series" ? "tv" : mediaType;
+  var isMovie = normMedia === "movie";
   var season = parseInt(seasonNum, 10);
   var episode = parseInt(episodeNum, 10);
   if (!(season > 0)) season = 1;
@@ -736,9 +802,9 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
           return doneFail("busca-0", "tmdb ok (" + tmdb.titles[0] + ") | buscas: 0 resultados");
         }
         for (var i = 0; i < candidates.length; i++) {
-          candidates[i].searchScore = bestTitleScore(
+          candidates[i].searchScore = candidateSearchScore(
             tmdb.titles,
-            candidates[i].title
+            candidates[i]
           );
         }
         candidates.sort(function (a, b) {
@@ -804,7 +870,7 @@ function onSettings() {
     { type: "header", label: "AnimeFire" },
     {
       type: "info",
-      label: "Usa o TMDB para descobrir o titulo e o AnimeFire para os streams (DASH)."
+      label: "Usa o TMDB para descobrir o titulo e o AnimeFire (animefire.one) para os streams."
     },
     {
       type: "text",

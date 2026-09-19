@@ -4,7 +4,7 @@ Assista aos animes do **AnimeFire** diretamente no app **Nuvio**, com a sua list
 
 ## O que é
 
-Este repositório é um plugin para o [Nuvio](https://nuvio.tv/) — um app gratuito e de código aberto para organizar e assistir seus filmes e séries. O plugin conecta o catálogo do [AnimeFire](https://animefire.io/) ao Nuvio, então você encontra os episódios dublados e legendados sem sair do app.
+Este repositório é um plugin para o [Nuvio](https://nuvio.tv/) — um app gratuito e de código aberto para organizar e assistir seus filmes e séries. O plugin conecta o catálogo do [AnimeFire](https://animefire.one/) ao Nuvio, então você encontra os episódios dublados e legendados sem sair do app.
 
 ## O que você ganha
 
