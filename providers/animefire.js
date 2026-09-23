@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.2.0
+/* AnimeFire provider for Nuvio. v1.3.0
  *
  * Fonte: https://animefire.one (API publica: https://api.animefire.one)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -7,7 +7,7 @@
  * - Devolve os manifests DASH (akumast.net, content-type application/dash+xml)
  *   como streams com format "mpd" (ExoPlayer/mpv resolvem via probe + mime).
  *
- * v1.2.0: migracao animefire.io -> animefire.one (api.animefire.io com DNS
+ * v1.3.0: migracao animefire.io -> animefire.one (api.animefire.io com DNS
  * morto, NXDOMAIN) + suporte ao payload novo de /animes/pesquisar que
  * devolve titles:{BR,JP} em vez de title:string. IDs agora sao hashes
  * alfanumericos de 11 chars.
@@ -15,7 +15,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.2.0";
+var PROVIDER_VERSION = "1.3.0";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -678,6 +678,35 @@ function scoreAnime(candidate, data, tmdb, isMovie) {
   return score;
 }
 
+function tmdbSeasonEpisodeCount(tmdbType, id, seasonNum) {
+  var keys = getTmdbKeys();
+  var url =
+    "https://api.themoviedb.org/3/" + tmdbType + "/" + encodeURIComponent(id) +
+    "/season/" + seasonNum + "?api_key=" + encodeURIComponent(keys[0]) + "&language=en-US";
+  return fetchJson(url).then(function (j) {
+    if (j && Array.isArray(j.episodes)) return j.episodes.length;
+    return 0;
+  });
+}
+
+function tmdbAbsoluteEpisode(tmdbType, id, season, episode) {
+  if (!(season > 1)) return Promise.resolve(episode);
+  var jobs = [];
+  for (var s = 1; s < season; s++) {
+    (function (sn) { jobs.push(tmdbSeasonEpisodeCount(tmdbType, id, sn)); })(s);
+  }
+  return Promise.all(jobs).then(function (counts) {
+    var total = 0;
+    var ok = true;
+    for (var i = 0; i < counts.length; i++) {
+      if (!(counts[i] > 0)) ok = false;
+      total += counts[i];
+    }
+    if (!ok || !(total > 0)) return -1;
+    return total + episode;
+  });
+}
+
 function findEpisodeId(data, isMovie, season, episode) {
   var eps = data && data.episodes;
   if (!Array.isArray(eps) || !eps.length) return "";
@@ -685,6 +714,7 @@ function findEpisodeId(data, isMovie, season, episode) {
   if (isMovie) {
     return eps[0] && eps[0].id ? String(eps[0].id) : "";
   }
+  /* 1) match exato S/E */
   for (i = 0; i < eps.length; i++) {
     var e = eps[i];
     if (!e) continue;
@@ -692,15 +722,45 @@ function findEpisodeId(data, isMovie, season, episode) {
       return String(e.id);
     }
   }
-  /* Fallback absoluto via seasons[].first_episode_number */
+  /* 2) site sem split de temporada: tudo numa lista unica (season 1/0/null).
+   * Se pediram S>1, tenta indice absoluto = episodio global. O chamador
+   * (getStreams) resolve o numero absoluto via TMDB e passa em
+   * data._absoluteEp; aqui tambem tentamos via seasons[].first_episode_number. */
+  function episodeByAbsolute(absIdx) {
+    if (!(absIdx > 0) || absIdx > eps.length) return "";
+    /* Tenta primeiro: entrada cujo number == absIdx (lista flat numerada 1..N) */
+    var k;
+    for (k = 0; k < eps.length; k++) {
+      if (eps[k] && Number(eps[k].number) === absIdx) {
+        /* so vale se a lista for flat (sem season>1 presente) para nao
+         * confundir com S1Eabs de um site ja separado */
+        var hasSplit = false;
+        var m;
+        for (m = 0; m < eps.length; m++) {
+          if (eps[m] && Number(eps[m].season) > 1) { hasSplit = true; break; }
+        }
+        if (!hasSplit) return String(eps[k].id);
+        break;
+      }
+    }
+    if (eps[absIdx - 1] && eps[absIdx - 1].id) return String(eps[absIdx - 1].id);
+    return "";
+  }
+  /* 2a) absoluto pre-resolvido via TMDB (soma dos eps das temporadas anteriores) */
+  if (data && data._absoluteEp > 0) {
+    var byAbs = episodeByAbsolute(Number(data._absoluteEp));
+    if (byAbs) return byAbs;
+  }
+  /* 2b) Fallback absoluto via seasons[].first_episode_number */
   try {
     var seasons = data.seasons;
     if (Array.isArray(seasons)) {
       for (i = 0; i < seasons.length; i++) {
         if (Number(seasons[i].number) === season && seasons[i].first_episode_number != null) {
-          var absIdx =
+          var absIdx2 =
             Number(seasons[i].first_episode_number) - 1 + (episode - 1);
-          if (eps[absIdx] && eps[absIdx].id) return String(eps[absIdx].id);
+          var r = episodeByAbsolute(absIdx2 + 1);
+          if (r) return r;
         }
       }
     }
@@ -708,6 +768,8 @@ function findEpisodeId(data, isMovie, season, episode) {
   if (season === 1 && eps[episode - 1] && eps[episode - 1].id) {
     return String(eps[episode - 1].id);
   }
+  /* 2c) ultimo recurso p/ S>1 em lista flat: assume temporadas de 12/13/24?
+   * NAO chuta — devolve "" e o chamador tenta o absoluto TMDB. */
   return "";
 }
 
@@ -749,6 +811,34 @@ function buildNuvioStreams(epData, isMovie, season, episode) {
     return (b.quality || 0) - (a.quality || 0);
   });
   return out;
+}
+
+function fetchEpWithStreams(best, isMovie, season, episode, diag) {
+  return fetchEpisode(best.episodeId).then(function (epData) {
+    if (!epData) {
+      var msg = "tmdb ok | ep " + best.episodeId + " SEM RESPOSTA";
+      if (diag) return [diagEntry("ep-falhou", msg)];
+      log(msg);
+      return [];
+    }
+    var streams = buildNuvioStreams(epData, isMovie, season, episode);
+    log("streams: " + streams.length);
+    if (!streams.length) {
+      var m2 = "tmdb ok | ep " + best.episodeId + " | 0 audios compativeis";
+      if (diag) return [diagEntry("sem-audio", m2)];
+      log(m2);
+      return [];
+    }
+    if (diag) {
+      streams.unshift(
+        diagEntry(
+          "ok-" + streams.length,
+          "tmdb ok | ep " + best.episodeId + " | " + streams.length + " streams"
+        )
+      );
+    }
+    return streams;
+  });
 }
 
 /* ---------- entrypoint ---------- */
@@ -826,6 +916,24 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
             }
           }
           if (!best || !best.episodeId) {
+            /* Site flat (sem split de temporada) + Nuvio pedindo S>1:
+             * converte S/E em numero absoluto via TMDB e tenta de novo. */
+            if (best && best.data && season > 1) {
+              return tmdbAbsoluteEpisode(tmdbType, id, season, episode).then(function (abs) {
+                if (abs > 0) {
+                  best.data._absoluteEp = abs;
+                  best.episodeId = findEpisodeId(best.data, isMovie, season, episode);
+                  log("tentativa absoluta S" + season + "E" + episode + " -> abs " + abs + " ep=" + (best.episodeId || "nada"));
+                  if (best.episodeId) return fetchEpWithStreams(best, isMovie, season, episode, diag);
+                }
+                return doneFail(
+                  "sem-episodio",
+                  "tmdb ok | " + candidates.length + " resultados" +
+                  (best ? " | melhor score=" + best.score + " SEM EPISODIO s=" + season + " e=" + episode : " | sem detalhes") +
+                  " (tentado absoluto=" + abs + ")"
+                );
+              });
+            }
             return doneFail(
               "sem-episodio",
               "tmdb ok | " + candidates.length + " resultados" +
@@ -833,25 +941,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
             );
           }
           log("anime ok score=" + best.score + " ep=" + best.episodeId);
-          return fetchEpisode(best.episodeId).then(function (epData) {
-            if (!epData) {
-              return doneFail("ep-falhou", "tmdb ok | ep " + best.episodeId + " SEM RESPOSTA");
-            }
-            var streams = buildNuvioStreams(epData, isMovie, season, episode);
-            log("streams: " + streams.length);
-            if (!streams.length) {
-              return doneFail("sem-audio", "tmdb ok | ep " + best.episodeId + " | 0 audios compativeis");
-            }
-            if (diag) {
-              streams.unshift(
-                diagEntry(
-                  "ok-" + streams.length,
-                  "tmdb ok | ep " + best.episodeId + " | " + streams.length + " streams"
-                )
-              );
-            }
-            return streams;
-          });
+          return fetchEpWithStreams(best, isMovie, season, episode, diag);
         });
       });
     })
