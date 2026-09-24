@@ -79,6 +79,8 @@ Projeto feito para fins educacionais. Todo o conteúdo pertence aos seus respect
 
 ## Notas de versão
 
+- **v1.4.5** — resumo do diagnóstico (id TMDB, fonte do offset, candidatos,
+  score) vai no campo `quality`, que é o que a lista do app mostra.
 - **v1.4.4** — arquivo renomeado para `providers/animefire-144.js` + versão
   também no campo `quality` do diagnóstico (ex. `sem-episodio v1.4.4`):
   o app cacheava o JS antigo pelo path, o nome novo força o download.

@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.4.4
+/* AnimeFire provider for Nuvio. v1.4.5
  *
  * Fonte: https://animefire.one (API publica: https://api.animefire.one)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -6,6 +6,10 @@
  * - Resolve o episodio (/anime/{id} -> /episode/{episodeId}).
  * - Devolve os manifests DASH (akumast.net, content-type application/dash+xml)
  *   como streams com format "mpd" (ExoPlayer/mpv resolvem via probe + mime).
+ *
+ * v1.4.5: resumo do diagnostico (id TMDB, fonte do offset, candidatos,
+ * score) vai no campo quality — a lista do app so mostra name+quality,
+ * o texto completo ficava escondido.
  *
  * v1.4.4: arquivo renomeado (animefire-144.js) + versao no campo quality
  * do diagnostico — o app cacheava o JS antigo pelo path; nome novo
@@ -34,7 +38,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.4.4";
+var PROVIDER_VERSION = "1.4.5";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -1531,7 +1535,10 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
 
       function resolveCandidates(candidates, off, offSrc) {
         if (!candidates.length) {
-          return doneFail("busca-0", "tmdb " + id + " (" + tmdb.titles[0] + ") | buscas: 0 resultados");
+          return doneFail(
+            "b0 " + id + " s" + season + "e" + episode + " " + offSrc + " o" + off + " t" + tmdbOff,
+            "tmdb " + id + " (" + tmdb.titles[0] + ") | buscas: 0 resultados (fonte=" + offSrc + " off=" + off + " tmdbOff=" + tmdbOff + ")"
+          );
         }
         for (var i = 0; i < candidates.length; i++) {
           candidates[i].searchScore = candidateSearchScore(
@@ -1587,7 +1594,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
             return fetchEpWithStreams(best, isMovie, season, episode, diag);
           }
           return doneFail(
-            "sem-episodio",
+            "se " + id + " s" + season + "e" + episode + " " + offSrc + " o" + off + " t" + tmdbOff + " c" + candidates.length + " sc" + bestScore,
             "tmdb " + id + " (" + tmdb.titles[0] + ") | " + candidates.length + " resultados" +
             " | melhor score=" + bestScore + " SEM EPISODIO s=" + season + " e=" + episode +
             " (absoluto=" + absTotal + " fonte=" + offSrc + " off=" + off + " tmdbOff=" + tmdbOff +
