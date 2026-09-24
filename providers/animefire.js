@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.4.1
+/* AnimeFire provider for Nuvio. v1.4.2
  *
  * Fonte: https://animefire.one (API publica: https://api.animefire.one)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -25,7 +25,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.4.1";
+var PROVIDER_VERSION = "1.4.2";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -1301,7 +1301,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
           log("anilist offset=" + alOff + " entry=" + (alInfo.entry && alInfo.entry.id));
         }
         if (!candidates.length) {
-          return doneFail("busca-0", "tmdb ok (" + tmdb.titles[0] + ") | buscas: 0 resultados");
+          return doneFail("busca-0", "tmdb " + id + " (" + tmdb.titles[0] + ") | buscas: 0 resultados");
         }
         for (var i = 0; i < candidates.length; i++) {
           candidates[i].searchScore = candidateSearchScore(
@@ -1358,7 +1358,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
           }
           return doneFail(
             "sem-episodio",
-            "tmdb ok | " + candidates.length + " resultados" +
+            "tmdb " + id + " (" + tmdb.titles[0] + ") | " + candidates.length + " resultados" +
             " | melhor score=" + bestScore + " SEM EPISODIO s=" + season + " e=" + episode +
             " (absoluto=" + absTotal + " alOff=" + alOff + " tmdbOff=" + tmdbOff +
             (sequelEntry ? " sequel-suspeito" : "") + ")"

@@ -1,12 +1,12 @@
 {
   "name": "AnimeFire",
-  "version": "1.4.1",
+      "version": "1.4.2",
   "scrapers": [
     {
       "id": "animefire",
       "name": "AnimeFire",
       "description": "AnimeFire (animefire.one) — animes dublados e legendados em PT-BR.",
-      "version": "1.4.1",
+  "version": "1.4.2",
       "author": "AnimeFire-Nuvio",
       "supportedTypes": ["movie", "tv", "anime"],
       "filename": "providers/animefire.js",
