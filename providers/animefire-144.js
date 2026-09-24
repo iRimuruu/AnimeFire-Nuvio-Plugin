@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.4.5
+/* AnimeFire provider for Nuvio. v1.4.6
  *
  * Fonte: https://animefire.one (API publica: https://api.animefire.one)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -6,6 +6,12 @@
  * - Resolve o episodio (/anime/{id} -> /episode/{episodeId}).
  * - Devolve os manifests DASH (akumast.net, content-type application/dash+xml)
  *   como streams com format "mpd" (ExoPlayer/mpv resolvem via probe + mime).
+ *
+ * v1.4.6: caso "TMDB fundido, Nuvio dividido" (ex. Solo Leveling S2E1
+ * pedido no id principal 127532, cujo seasons[] do TMDB so tem S1 com
+ * 25 eps fundidos): a temporada pedida nao existe no TMDB, entao o
+ * tmdbOff e ignorado e o offset vem da cadeia da franquia andando
+ * (S-1) sequels TV a partir da base (AniList, com fallback Kitsu).
  *
  * v1.4.5: resumo do diagnostico (id TMDB, fonte do offset, candidatos,
  * score) vai no campo quality — a lista do app so mostra name+quality,
@@ -38,7 +44,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.4.5";
+var PROVIDER_VERSION = "1.4.6";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -1256,6 +1262,121 @@ function kitsuFranchiseOffset(tmdbTitles, tmdbYear) {
     });
 }
 
+/* ---------- offset por temporada exibida (v1.4.6) ---------- */
+
+/* A temporada pedida existe no seasons[] do TMDB? Se o TMDB lista
+ * temporadas mas a pedida nao esta la (ex. id 127532 so tem S1 fundida
+ * com 25 eps e o Nuvio pede S2), o tmdbOff e invalido e deve ser
+ * ignorado: o offset vem da cadeia da franquia. */
+function tmdbHasSeasonList(tmdb) {
+  return !!(tmdb && Array.isArray(tmdb.seasons) && tmdb.seasons.length);
+}
+
+function tmdbSeasonExists(tmdb, season) {
+  var seasons = tmdb && tmdb.seasons;
+  if (!Array.isArray(seasons)) return false;
+  for (var i = 0; i < seasons.length; i++) {
+    if (Number(seasons[i].season_number) === Number(season)) return true;
+  }
+  return false;
+}
+
+/* Primeiro sequel com formato TV nas relacoes (mesmo payload usado pelo
+ * prequel walk, sem request extra no primeiro nivel). */
+function anilistSequelNode(anilistId) {
+  return anilistMediaRelations(anilistId).then(function (media) {
+    if (!media || !media.relations || !Array.isArray(media.relations.edges)) return null;
+    for (var i = 0; i < media.relations.edges.length; i++) {
+      var e = media.relations.edges[i];
+      if (!e || e.relationType !== "SEQUEL" || !e.node) continue;
+      if (!isTvFormat(e.node.format)) continue;
+      return e.node;
+    }
+    return null;
+  });
+}
+
+/* Offset da temporada S exibida pelo Nuvio dentro da franquia: anda
+ * (S-1) sequels TV a partir da entrada base e soma os prequels TV do
+ * destino. Para S>1 o offset valido e sempre >0 (a temporada anterior
+ * tem ao menos 1 ep); se a cadeia quebrar, ok=false e o chamador deve
+ * falhar de forma visivel em vez de chutar episodio. */
+function anilistOffsetForSeason(tmdbTitles, tmdbYear, season) {
+  return anilistEntryForTmdb(tmdbTitles, tmdbYear)
+    .then(function (found) {
+      if (!found || !found.entry) return { offset: 0, entry: null, ok: false };
+      if (!(season > 1)) {
+        return anilistPrequelOffset(found.entry.id, {}, 0).then(function (off) {
+          return { offset: off > 0 ? off : 0, entry: found.entry, ok: true };
+        });
+      }
+      var chain = Promise.resolve(found.entry);
+      var steps = season - 1;
+      for (var s = 0; s < steps; s++) {
+        chain = chain.then(function (cur) {
+          if (!cur) return null;
+          return anilistSequelNode(cur.id);
+        });
+      }
+      return chain.then(function (finalEntry) {
+        if (!finalEntry) return { offset: 0, entry: null, ok: false };
+        return anilistPrequelOffset(finalEntry.id, {}, 0).then(function (off) {
+          return { offset: off > 0 ? off : 0, entry: finalEntry, ok: !!(off > 0) };
+        });
+      });
+    })
+    .catch(function () {
+      return { offset: 0, entry: null, ok: false };
+    });
+}
+
+function kitsuSequelNode(kitsuId) {
+  return kitsuRelations(kitsuId).then(function (j) {
+    if (!j || !Array.isArray(j.data)) return null;
+    for (var i = 0; i < j.data.length; i++) {
+      var rel = j.data[i];
+      if (!rel || !rel.attributes || rel.attributes.role !== "sequel") continue;
+      var dest = rel.relationships && rel.relationships.destination && rel.relationships.destination.data;
+      if (!dest || dest.type !== "anime") continue;
+      var destEntry = kitsuFindIncluded(j, "anime", dest.id);
+      if (!destEntry) continue;
+      var sub = destEntry.attributes && String(destEntry.attributes.subtype || "").toUpperCase();
+      if (sub !== "TV") continue;
+      return { id: String(dest.id) };
+    }
+    return null;
+  });
+}
+
+function kitsuOffsetForSeason(tmdbTitles, tmdbYear, season) {
+  return kitsuEntryForTmdb(tmdbTitles, tmdbYear)
+    .then(function (found) {
+      if (!found || !found.entry) return { offset: 0, entry: null, ok: false };
+      if (!(season > 1)) {
+        return kitsuPrequelOffset(found.entry.id, {}, 0).then(function (off) {
+          return { offset: off > 0 ? off : 0, entry: found.entry, ok: true };
+        });
+      }
+      var chain = Promise.resolve(found.entry);
+      var steps = season - 1;
+      for (var s = 0; s < steps; s++) {
+        chain = chain.then(function (cur) {
+          if (!cur || cur.id == null) return null;
+          return kitsuSequelNode(cur.id);
+        });
+      }
+      return chain.then(function (finalEntry) {
+        if (!finalEntry) return { offset: 0, entry: null, ok: false };
+        return kitsuPrequelOffset(finalEntry.id, {}, 0).then(function (off) {
+          return { offset: off > 0 ? off : 0, entry: finalEntry, ok: !!(off > 0) };
+        });
+      });
+    })
+    .catch(function () {
+      return { offset: 0, entry: null, ok: false };
+    });
+}
+
 /* Entrada TMDB que ja e uma temporada separada (ID split): a menor
  * season_number > 1 (ex. 330833 so tem S2) ou titulo com sufixo de
  * sequel (": ...", "Season 2", "Part 2"). Nesses casos, sem offset
@@ -1495,6 +1616,36 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
         queries.push(extraQ[qi]);
       }
       var searchP = searchAll(queries);
+      /* Caso "TMDB fundido, Nuvio dividido": o TMDB lista temporadas mas
+       * a pedida nao existe la (ex. 127532 so tem a S1 fundida e o app
+       * pede S2). O tmdbOff seria a S1 inteira (errado); ignora e resolve
+       * o offset andando a cadeia da franquia. */
+      var mergedMismatch = !isMovie && season > 1 && tmdbHasSeasonList(tmdb) && !tmdbSeasonExists(tmdb, season);
+      if (mergedMismatch) {
+        log("temporada S" + season + " fora do TMDB (" + id + "), usando cadeia da franquia");
+        var mergedAlP = withTimeout(anilistOffsetForSeason(tmdb.titles, tmdb.year, season), 20000).then(function (r) {
+          return r || { offset: 0, entry: null, ok: false };
+        });
+        return Promise.all([searchP, mergedAlP]).then(function (both) {
+          var candidates = both[0] || [];
+          var mInfo = both[1] || { offset: 0, entry: null, ok: false };
+          var mOff = Number(mInfo.offset) > 0 ? Number(mInfo.offset) : 0;
+          if (mInfo.ok && mOff > 0) {
+            log("anilist offset=" + mOff + " entry=" + (mInfo.entry && mInfo.entry.id));
+            return resolveCandidates(candidates, mOff, "anilist", 0, false);
+          }
+          log("anilist sem cadeia, tentando kitsu");
+          return withTimeout(kitsuOffsetForSeason(tmdb.titles, tmdb.year, season), 25000).then(function (kInfo) {
+            kInfo = kInfo || { offset: 0, entry: null, ok: false };
+            var kOff = Number(kInfo.offset) > 0 ? Number(kInfo.offset) : 0;
+            if (kInfo.ok && kOff > 0) {
+              log("kitsu offset=" + kOff + " entry=" + (kInfo.entry && kInfo.entry.id));
+              return resolveCandidates(candidates, kOff, "kitsu", 0, false);
+            }
+            return resolveCandidates(candidates, 0, "nenhum", 0, true);
+          });
+        });
+      }
       /* Orcamento global de 20s p/ o offset AniList: se estourar, segue
        * com offset 0 (o modo sequel falha de forma visivel no diag em
        * vez de congelar a lista de fontes). */
@@ -1529,15 +1680,15 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
           }
           var off = alOff > 0 ? alOff : kitsuOff;
           var offSrc = alOff > 0 ? "anilist" : (kitsuOff > 0 ? "kitsu" : "nenhum");
-          return resolveCandidates(candidates, off, offSrc);
+          return resolveCandidates(candidates, off, offSrc, tmdbOff, false);
         });
       });
 
-      function resolveCandidates(candidates, off, offSrc) {
+      function resolveCandidates(candidates, off, offSrc, tmdbOffEff, unresolved) {
         if (!candidates.length) {
           return doneFail(
-            "b0 " + id + " s" + season + "e" + episode + " " + offSrc + " o" + off + " t" + tmdbOff,
-            "tmdb " + id + " (" + tmdb.titles[0] + ") | buscas: 0 resultados (fonte=" + offSrc + " off=" + off + " tmdbOff=" + tmdbOff + ")"
+            "b0 " + id + " s" + season + "e" + episode + " " + offSrc + " o" + off + " t" + tmdbOffEff,
+            "tmdb " + id + " (" + tmdb.titles[0] + ") | buscas: 0 resultados (fonte=" + offSrc + " off=" + off + " tmdbOff=" + tmdbOffEff + ")"
           );
         }
         for (var i = 0; i < candidates.length; i++) {
@@ -1552,9 +1703,10 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
         var top = candidates.slice(0, 4);
         var sequelEntry = isLikelySequelEntry(tmdb);
         return fetchAnimeList(top).then(function (details) {
-          /* Absoluto da franquia = offset (AniList ou Kitsu p/ IDs split)
-           * + temporadas anteriores do mesmo ID TMDB + episodio pedido. */
-          var absTotal = off + tmdbOff + episode;
+          /* Absoluto da franquia = offset da cadeia (AniList/Kitsu) +
+           * temporadas anteriores do mesmo ID TMDB + episodio pedido.
+           * unresolved = cadeia sem resposta: falha visivel, nunca chuta. */
+          var absTotal = off + tmdbOffEff + episode;
           var best = null;
           var bestScore = -100000;
           for (var i = 0; i < details.length; i++) {
@@ -1566,14 +1718,14 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
             /* Sequel (offset>0) com site flat: o direto S1E1 estaria
              * errado (devolveria o ep 1 em vez do 13+), entao pula o
              * direto e usa so o absoluto. */
-            if (!(off > 0 && flat)) {
+            if (!unresolved && !(off > 0 && flat)) {
               epDirect = findEpisodeId(d.data, isMovie, season, episode);
             }
             var epAbs = "";
-            /* Sem offset confiavel numa entrada sequel (AniList e Kitsu
-             * falharam): nao chuta — devolver ep errado e pior que falhar. */
-            var noOffsetSequel = sequelEntry && !(off > 0) && !(tmdbOff > 0);
-            if (!isMovie && absTotal > 0 && (off > 0 || tmdbOff > 0 || (!epDirect && !noOffsetSequel))) {
+            /* Sem offset confiavel (cadeia sem resposta ou entrada sequel
+             * sem off): nao chuta — devolver ep errado e pior que falhar. */
+            var noOffsetSequel = unresolved || (sequelEntry && !(off > 0) && !(tmdbOffEff > 0));
+            if (!isMovie && !unresolved && absTotal > 0 && (off > 0 || tmdbOffEff > 0 || (!epDirect && !noOffsetSequel))) {
               epAbs = findEpisodeByAbsolute(d.data, absTotal);
             }
             var epId = epDirect || epAbs;
@@ -1587,18 +1739,18 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
           }
           if (best && best.episodeId) {
             if (best.abs) {
-              log("anime ok score=" + best.score + " ep=" + best.episodeId + " via absoluto " + absTotal + " (fonte=" + offSrc + " off=" + off + " tmdbOff=" + tmdbOff + ")");
+              log("anime ok score=" + best.score + " ep=" + best.episodeId + " via absoluto " + absTotal + " (fonte=" + offSrc + " off=" + off + " tmdbOff=" + tmdbOffEff + ")");
             } else {
               log("anime ok score=" + best.score + " ep=" + best.episodeId);
             }
             return fetchEpWithStreams(best, isMovie, season, episode, diag);
           }
           return doneFail(
-            "se " + id + " s" + season + "e" + episode + " " + offSrc + " o" + off + " t" + tmdbOff + " c" + candidates.length + " sc" + bestScore,
+            "se " + id + " s" + season + "e" + episode + " " + offSrc + " o" + off + " t" + tmdbOffEff + " c" + candidates.length + " sc" + bestScore,
             "tmdb " + id + " (" + tmdb.titles[0] + ") | " + candidates.length + " resultados" +
             " | melhor score=" + bestScore + " SEM EPISODIO s=" + season + " e=" + episode +
-            " (absoluto=" + absTotal + " fonte=" + offSrc + " off=" + off + " tmdbOff=" + tmdbOff +
-            (sequelEntry ? " sequel-suspeito" : "") + ")"
+            " (absoluto=" + absTotal + " fonte=" + offSrc + " off=" + off + " tmdbOff=" + tmdbOffEff +
+            (unresolved ? " cadeia-sem-resposta" : "") + (sequelEntry ? " sequel-suspeito" : "") + ")"
           );
         });
       }

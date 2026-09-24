@@ -79,6 +79,10 @@ Projeto feito para fins educacionais. Todo o conteúdo pertence aos seus respect
 
 ## Notas de versão
 
+- **v1.4.6** — caso "TMDB fundido, Nuvio dividido": se a temporada pedida
+  não existe no `seasons[]` do TMDB (ex. S2 pedida no id 127532, cuja S1
+  tem 25 eps fundidos), o `tmdbOff` é ignorado e o offset vem andando a
+  cadeia da franquia (AniList, fallback Kitsu). Teste: `node test_merged.js`.
 - **v1.4.5** — resumo do diagnóstico (id TMDB, fonte do offset, candidatos,
   score) vai no campo `quality`, que é o que a lista do app mostra.
 - **v1.4.4** — arquivo renomeado para `providers/animefire-144.js` + versão
