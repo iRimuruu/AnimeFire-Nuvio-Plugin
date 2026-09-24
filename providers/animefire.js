@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.4.2
+/* AnimeFire provider for Nuvio. v1.4.3
  *
  * Fonte: https://animefire.one (API publica: https://api.animefire.one)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -25,7 +25,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.4.2";
+var PROVIDER_VERSION = "1.4.3";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -871,11 +871,11 @@ function anilistTitleList(m) {
   return uniqueStrings(out);
 }
 
-/* Score proprio p/ AniList: cobertura das palavras do TMDB (0..100).
+/* Score proprio p/ AniList/Kitsu: cobertura das palavras do TMDB (0..100).
  * Diferente do titleScore (que da bonus p/ substring e favoreceria a S1
  * base contra o titulo S2 completo), aqui quem cobre todas as palavras
  * do TMDB vence: S2 cobre 6/6, S1 cobre 2/6. */
-function anilistVariantScore(tmdbTitles, variant) {
+function coverageTitleScore(tmdbTitles, variant) {
   var v = normalizeTitle(variant);
   var vw = v ? v.split(" ") : [];
   var best = 0;
@@ -920,7 +920,7 @@ function anilistPickScore(tmdbTitles, tmdbYear, m) {
   var variants = anilistTitleList(m);
   var best = 0;
   for (var i = 0; i < variants.length; i++) {
-    var s = anilistVariantScore(tmdbTitles, variants[i]);
+    var s = coverageTitleScore(tmdbTitles, variants[i]);
     if (s > best) best = s;
   }
   var ay = (m && m.seasonYear) || (m && m.startDate && m.startDate.year) || 0;
@@ -1038,6 +1038,202 @@ function anilistFranchiseOffset(tmdbTitles, tmdbYear) {
     .then(function (found) {
       if (!found || !found.entry) return { offset: 0, entry: null };
       return anilistPrequelOffset(found.entry.id, {}, 0).then(function (off) {
+        return { offset: off > 0 ? off : 0, entry: found.entry };
+      });
+    })
+    .catch(function () {
+      return { offset: 0, entry: null };
+    });
+}
+
+/* ---------- Kitsu (franquia, plano B 100% GET) ---------- */
+
+/* Se o AniList (POST GraphQL) estiver inacessivel de dentro do app,
+ * o Kitsu resolve o mesmo offset so com GET, sem key. Ex. Solo S2:
+ * anime/48671 -> relationships role=prequel -> anime 46231 (TV, 12 eps).
+ * Tudo com include=destination: 1 request por nivel da cadeia. */
+var KITSU_API = "https://kitsu.io/api/edge";
+var _kitsuSearchCache = {};
+var _kitsuEntryCache = {};
+var _kitsuRelCache = {};
+
+function kitsuGet(path) {
+  return fetch(KITSU_API + path, {
+    method: "GET",
+    headers: {
+      Accept: "application/vnd.api+json",
+      "User-Agent": DEFAULT_UA,
+      Referer: SITE_URL
+    }
+  })
+    .then(function (res) {
+      if (!res || !res.ok) return null;
+      return res.text();
+    })
+    .then(function (text) {
+      if (!text) return null;
+      return safeParseJson(text);
+    })
+    .catch(function () {
+      return null;
+    });
+}
+
+function kitsuSearchOne(title) {
+  var key = String(title).slice(0, 80);
+  if (_kitsuSearchCache[key]) return Promise.resolve(_kitsuSearchCache[key]);
+  var url = "/anime?filter[text]=" + encodeURIComponent(key) + "&page[limit]=5";
+  return withTimeout(kitsuGet(url), ANILIST_TIMEOUT_MS).then(function (j) {
+    var arr = j && Array.isArray(j.data) ? j.data : [];
+    _kitsuSearchCache[key] = arr;
+    return arr;
+  });
+}
+
+function kitsuTitleList(entry) {
+  var out = [];
+  var t = entry && entry.attributes && entry.attributes.titles;
+  if (t && typeof t === "object") {
+    for (var k in t) {
+      if (Object.prototype.hasOwnProperty.call(t, k) && t[k]) out.push(String(t[k]));
+    }
+  }
+  var canon = entry && entry.attributes && entry.attributes.canonicalTitle;
+  if (canon) out.push(String(canon));
+  return uniqueStrings(out);
+}
+
+function kitsuYear(entry) {
+  var sd = entry && entry.attributes && entry.attributes.startDate;
+  if (typeof sd === "string" && sd.length >= 4) return sd.substr(0, 4);
+  return "";
+}
+
+function kitsuPickScore(tmdbTitles, tmdbYear, entry) {
+  var variants = kitsuTitleList(entry);
+  var best = 0;
+  for (var i = 0; i < variants.length; i++) {
+    var s = coverageTitleScore(tmdbTitles, variants[i]);
+    if (s > best) best = s;
+  }
+  var ky = kitsuYear(entry);
+  var ty = parseInt(tmdbYear, 10);
+  var kyN = parseInt(ky, 10);
+  if (kyN && ty) {
+    if (kyN === ty) best += 15;
+    else if (Math.abs(kyN - ty) === 1) best += 5;
+    else if (Math.abs(kyN - ty) > 5) best -= 10;
+  }
+  var sub = entry && entry.attributes && String(entry.attributes.subtype || "").toUpperCase();
+  if (sub === "TV") best += 5;
+  return best;
+}
+
+function kitsuEntryForTmdb(tmdbTitles, tmdbYear) {
+  var cacheKey = (tmdbTitles || []).join("|") + "#" + (tmdbYear || "");
+  if (cacheKey in _kitsuEntryCache) return Promise.resolve(_kitsuEntryCache[cacheKey]);
+  var queries = (tmdbTitles || []).slice(0, 3);
+  var extra = baseTitleVariants(tmdbTitles || []);
+  for (var e = 0; e < extra.length && queries.length < 5; e++) {
+    var dup = false;
+    for (var q = 0; q < queries.length; q++) {
+      if (queries[q] === extra[e]) dup = true;
+    }
+    if (!dup) queries.push(extra[e]);
+  }
+  var jobs = [];
+  for (var i = 0; i < queries.length; i++) {
+    jobs.push(kitsuSearchOne(queries[i]));
+  }
+  return Promise.all(jobs).then(function (lists) {
+    var best = null;
+    var bestScore = 0;
+    for (var li = 0; li < lists.length; li++) {
+      var arr = lists[li] || [];
+      for (var mi = 0; mi < arr.length; mi++) {
+        var en = arr[mi];
+        if (!en || !en.id) continue;
+        var sc = kitsuPickScore(tmdbTitles, tmdbYear, en);
+        if (sc > bestScore) {
+          bestScore = sc;
+          best = en;
+        }
+      }
+    }
+    if (!best || bestScore < 50) {
+      _kitsuEntryCache[cacheKey] = null;
+      return null;
+    }
+    var found = { entry: best, score: bestScore };
+    _kitsuEntryCache[cacheKey] = found;
+    return found;
+  });
+}
+
+function kitsuRelations(kitsuId) {
+  var id = String(kitsuId);
+  if (_kitsuRelCache[id]) return Promise.resolve(_kitsuRelCache[id]);
+  var url = "/anime/" + encodeURIComponent(id) + "/media-relationships?include=destination&page[limit]=20";
+  return withTimeout(kitsuGet(url), ANILIST_TIMEOUT_MS).then(function (j) {
+    if (j && Array.isArray(j.data)) _kitsuRelCache[id] = j;
+    return j;
+  });
+}
+
+function kitsuFindIncluded(j, type, id) {
+  var inc = j && j.included;
+  if (!Array.isArray(inc)) return null;
+  for (var i = 0; i < inc.length; i++) {
+    if (inc[i] && inc[i].type === type && String(inc[i].id) === String(id)) return inc[i];
+  }
+  return null;
+}
+
+/* Soma os eps dos prequels TV (recursivo, maior caminho linear).
+ * So subtype TV conta: specials/movies/recaps sao ignorados. */
+function kitsuPrequelOffset(kitsuId, visited, depth) {
+  visited = visited || {};
+  depth = depth || 0;
+  var id = String(kitsuId);
+  if (!id || visited[id] || depth > 5) return Promise.resolve(0);
+  visited[id] = true;
+  return kitsuRelations(id).then(function (j) {
+    if (!j || !Array.isArray(j.data)) return 0;
+    var jobs = [];
+    for (var i = 0; i < j.data.length; i++) {
+      var rel = j.data[i];
+      if (!rel || !rel.attributes || rel.attributes.role !== "prequel") continue;
+      var dest = rel.relationships && rel.relationships.destination && rel.relationships.destination.data;
+      if (!dest || dest.type !== "anime" || visited[String(dest.id)]) continue;
+      var destEntry = kitsuFindIncluded(j, "anime", dest.id);
+      if (!destEntry) continue;
+      var sub = destEntry.attributes && String(destEntry.attributes.subtype || "").toUpperCase();
+      if (sub !== "TV") continue;
+      (function (destId, eps) {
+        jobs.push(
+          kitsuPrequelOffset(destId, visited, depth + 1).then(function (sub2) {
+            var own = Number(eps) > 0 ? Number(eps) : 0;
+            return own + sub2;
+          })
+        );
+      })(String(dest.id), destEntry.attributes && destEntry.attributes.episodeCount);
+    }
+    if (!jobs.length) return 0;
+    return Promise.all(jobs).then(function (parts) {
+      var mx = 0;
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i] > mx) mx = parts[i];
+      }
+      return mx;
+    });
+  });
+}
+
+function kitsuFranchiseOffset(tmdbTitles, tmdbYear) {
+  return kitsuEntryForTmdb(tmdbTitles, tmdbYear)
+    .then(function (found) {
+      if (!found || !found.entry) return { offset: 0, entry: null };
+      return kitsuPrequelOffset(found.entry.id, {}, 0).then(function (off) {
         return { offset: off > 0 ? off : 0, entry: found.entry };
       });
     })
@@ -1300,6 +1496,30 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
         if (alOff > 0) {
           log("anilist offset=" + alOff + " entry=" + (alInfo.entry && alInfo.entry.id));
         }
+        var sequelEntry = isLikelySequelEntry(tmdb);
+        /* AniList zerado numa entrada sequel suspeita: tenta o Kitsu
+         * (GET puro, costuma passar onde o POST GraphQL nao passa)
+         * antes de desistir. Orcamento proprio de 25s. */
+        var kitsuP;
+        if (!isMovie && sequelEntry && !(alOff > 0) && !(tmdbOff > 0)) {
+          kitsuP = withTimeout(kitsuFranchiseOffset(tmdb.titles, tmdb.year), 25000).then(function (r) {
+            return r || { offset: 0, entry: null };
+          });
+        } else {
+          kitsuP = Promise.resolve({ offset: 0, entry: null });
+        }
+        return kitsuP.then(function (kitsuInfo) {
+          var kitsuOff = Number(kitsuInfo.offset) > 0 ? Number(kitsuInfo.offset) : 0;
+          if (kitsuOff > 0) {
+            log("kitsu offset=" + kitsuOff + " entry=" + (kitsuInfo.entry && kitsuInfo.entry.id));
+          }
+          var off = alOff > 0 ? alOff : kitsuOff;
+          var offSrc = alOff > 0 ? "anilist" : (kitsuOff > 0 ? "kitsu" : "nenhum");
+          return resolveCandidates(candidates, off, offSrc);
+        });
+      });
+
+      function resolveCandidates(candidates, off, offSrc) {
         if (!candidates.length) {
           return doneFail("busca-0", "tmdb " + id + " (" + tmdb.titles[0] + ") | buscas: 0 resultados");
         }
@@ -1315,9 +1535,9 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
         var top = candidates.slice(0, 4);
         var sequelEntry = isLikelySequelEntry(tmdb);
         return fetchAnimeList(top).then(function (details) {
-          /* Absoluto da franquia = prequels AniList (IDs split) +
-           * temporadas anteriores do mesmo ID TMDB + episodio pedido. */
-          var absTotal = alOff + tmdbOff + episode;
+          /* Absoluto da franquia = offset (AniList ou Kitsu p/ IDs split)
+           * + temporadas anteriores do mesmo ID TMDB + episodio pedido. */
+          var absTotal = off + tmdbOff + episode;
           var best = null;
           var bestScore = -100000;
           for (var i = 0; i < details.length; i++) {
@@ -1326,17 +1546,17 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
             var sc = scoreAnime(d.candidate, d.data, tmdb, isMovie);
             var flat = !hasSplitSeasons(d.data);
             var epDirect = "";
-            /* Sequel (alOff>0) com site flat: o direto S1E1 estaria
+            /* Sequel (offset>0) com site flat: o direto S1E1 estaria
              * errado (devolveria o ep 1 em vez do 13+), entao pula o
              * direto e usa so o absoluto. */
-            if (!(alOff > 0 && flat)) {
+            if (!(off > 0 && flat)) {
               epDirect = findEpisodeId(d.data, isMovie, season, episode);
             }
             var epAbs = "";
-            /* Sem offset confiavel numa entrada sequel (AniList falhou):
-             * nao chuta — devolver ep errado e pior que falhar. */
-            var noOffsetSequel = sequelEntry && !(alOff > 0) && !(tmdbOff > 0);
-            if (!isMovie && absTotal > 0 && (alOff > 0 || tmdbOff > 0 || (!epDirect && !noOffsetSequel))) {
+            /* Sem offset confiavel numa entrada sequel (AniList e Kitsu
+             * falharam): nao chuta — devolver ep errado e pior que falhar. */
+            var noOffsetSequel = sequelEntry && !(off > 0) && !(tmdbOff > 0);
+            if (!isMovie && absTotal > 0 && (off > 0 || tmdbOff > 0 || (!epDirect && !noOffsetSequel))) {
               epAbs = findEpisodeByAbsolute(d.data, absTotal);
             }
             var epId = epDirect || epAbs;
@@ -1350,7 +1570,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
           }
           if (best && best.episodeId) {
             if (best.abs) {
-              log("anime ok score=" + best.score + " ep=" + best.episodeId + " via absoluto " + absTotal + " (alOff=" + alOff + " tmdbOff=" + tmdbOff + ")");
+              log("anime ok score=" + best.score + " ep=" + best.episodeId + " via absoluto " + absTotal + " (fonte=" + offSrc + " off=" + off + " tmdbOff=" + tmdbOff + ")");
             } else {
               log("anime ok score=" + best.score + " ep=" + best.episodeId);
             }
@@ -1360,11 +1580,11 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
             "sem-episodio",
             "tmdb " + id + " (" + tmdb.titles[0] + ") | " + candidates.length + " resultados" +
             " | melhor score=" + bestScore + " SEM EPISODIO s=" + season + " e=" + episode +
-            " (absoluto=" + absTotal + " alOff=" + alOff + " tmdbOff=" + tmdbOff +
+            " (absoluto=" + absTotal + " fonte=" + offSrc + " off=" + off + " tmdbOff=" + tmdbOff +
             (sequelEntry ? " sequel-suspeito" : "") + ")"
           );
         });
-      });
+      }
     })
     .catch(function (e) {
       var msg = "erro interno: " + ((e && e.message) || e);
