@@ -7,7 +7,7 @@ globalThis.fetch = function (url, opts) {
   }
   return realFetch(url, opts);
 };
-var mod = require("./providers/animefire.js");
+var mod = require("./providers/animefire-144.js");
 mod.getStreams("82684", "tv", 1, 1).then(function (s) {
   console.log("entradas:", s.length);
   s.forEach(function (x) { console.log("-", x.name, "| q =", x.quality); });

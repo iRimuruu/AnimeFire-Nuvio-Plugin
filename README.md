@@ -79,6 +79,9 @@ Projeto feito para fins educacionais. Todo o conteúdo pertence aos seus respect
 
 ## Notas de versão
 
+- **v1.4.4** — arquivo renomeado para `providers/animefire-144.js` + versão
+  também no campo `quality` do diagnóstico (ex. `sem-episodio v1.4.4`):
+  o app cacheava o JS antigo pelo path, o nome novo força o download.
 - **v1.4.3** — fallback Kitsu (GET puro, sem key) para o offset de franquia
   quando o AniList (POST GraphQL) não responde de dentro do app; a fonte
   do offset aparece no diagnóstico (`fonte=anilist|kitsu|nenhum`).

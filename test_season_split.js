@@ -1,4 +1,4 @@
-var mod = require("./providers/animefire.js");
+var mod = require("./providers/animefire-144.js");
 
 function show(tag, streams) {
   console.log("==== " + tag + " (" + streams.length + ") ====");
