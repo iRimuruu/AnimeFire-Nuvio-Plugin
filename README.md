@@ -77,6 +77,14 @@ Dentro do Nuvio, nos ajustes do plugin **AnimeFire**, você encontra:
 
 Projeto feito para fins educacionais. Todo o conteúdo pertence aos seus respectivos donos — este repositório só indica onde o app pode encontrar os episódios. Use de acordo com as leis do seu país.
 
+## Notas de versão
+
+- **v1.4.0** — corrige animes com temporadas separadas no Nuvio/TMDB (IDs
+  separados por temporada, ex. Solo Leveling S2) mas juntados numa só
+  entrada no AnimeFire: o plugin calcula o número absoluto do episódio
+  na franquia via AniList (cadeia PREQUEL) + `seasons[]` do TMDB e
+  mapeia na lista única do site. Teste: `node test_season_split.js`.
+
 ## Licença
 
 Distribuído sob a licença [GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.html).
