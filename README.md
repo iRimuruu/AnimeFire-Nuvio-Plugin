@@ -79,6 +79,9 @@ Projeto feito para fins educacionais. Todo o conteúdo pertence aos seus respect
 
 ## Notas de versão
 
+- **v1.4.1** — timeout nas chamadas AniList (12s/req, 20s total: sem isso,
+  uma requisição travada no app congelava a lista de fontes) + versão
+  marcada nas entradas de diagnóstico (`[v1.4.1]` no texto).
 - **v1.4.0** — corrige animes com temporadas separadas no Nuvio/TMDB (IDs
   separados por temporada, ex. Solo Leveling S2) mas juntados numa só
   entrada no AnimeFire: o plugin calcula o número absoluto do episódio

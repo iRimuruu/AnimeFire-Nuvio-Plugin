@@ -1,4 +1,4 @@
-/* AnimeFire provider for Nuvio. v1.4.0
+/* AnimeFire provider for Nuvio. v1.4.1
  *
  * Fonte: https://animefire.one (API publica: https://api.animefire.one)
  * - Busca o titulo no TMDB a partir do tmdbId recebido do Nuvio.
@@ -6,6 +6,10 @@
  * - Resolve o episodio (/anime/{id} -> /episode/{episodeId}).
  * - Devolve os manifests DASH (akumast.net, content-type application/dash+xml)
  *   como streams com format "mpd" (ExoPlayer/mpv resolvem via probe + mime).
+ *
+ * v1.4.1: timeout nas chamadas AniList (sem timeout, uma requisicao
+ * travada no app fazia o getStreams nunca responder -> lista vazia) +
+ * versao marcada nas entradas de diagnostico.
  *
  * v1.4.0: corrige animes com temporadas separadas no Nuvio/TMDB (IDs
  * separados por temporada, ex. Solo Leveling S2 = tmdb 330833) mas
@@ -21,7 +25,7 @@
  * Hermes-safe: sem async/await, sem optional chaining, sem spread.
  */
 
-var PROVIDER_VERSION = "1.4.0";
+var PROVIDER_VERSION = "1.4.1";
 var TMDB_API_KEYS_DEFAULT = [
   "3fd2be6f0c70a2a598f084ddfb75487c",
   "8265bd1679663a7ea12ac168da84d2e8"
@@ -250,11 +254,12 @@ function diagEnabled() {
 }
 
 /* O app exibe nome (grande) + quality (pequeno); o diagnostico vai no
- * quality para ficar visivel, e a mensagem completa no title. */
+ * quality para ficar visivel, e a mensagem completa no title.
+ * A versao vai no fim do title para confirmar qual codigo o app rodou. */
 function diagEntry(short, full) {
   return {
     name: "AnimeFire DIAG",
-    title: String(full),
+    title: String(full) + " [v" + PROVIDER_VERSION + "]",
     url: SITE_URL,
     quality: String(short),
     provider: "animefire",
@@ -775,6 +780,29 @@ function baseTitleVariants(titles) {
 /* ---------- AniList (franquia) ---------- */
 
 var ANILIST_API = "https://graphql.anilist.co";
+var ANILIST_TIMEOUT_MS = 12000;
+
+/* Promise.race com timeout que funciona mesmo no Hermes (setTimeout
+ * pode nao existir -> segue sem limite, como o resto do plugin). */
+function withTimeout(p, ms) {
+  try {
+    if (typeof setTimeout !== "function") return p;
+  } catch (e) {
+    return p;
+  }
+  var timer = null;
+  var tp = new Promise(function (resolve) {
+    timer = setTimeout(function () {
+      resolve(null);
+    }, ms);
+  });
+  return Promise.race([p, tp]).then(function (r) {
+    try {
+      if (timer) clearTimeout(timer);
+    } catch (e2) {}
+    return r;
+  });
+}
 
 /* Cache em memoria (vive enquanto o modulo estiver carregado no app):
  * evita repetir as mesmas buscas AniList a cada episodio e reduz o
@@ -813,10 +841,11 @@ function anilistPost(query, variables) {
       });
   }
   /* 1 retry imediato: falhas transientes (429/5xx) nao podem resultar
-   * em episodio errado no modo sequel. */
-  return once().then(function (r) {
+   * em episodio errado no modo sequel. Tudo com timeout: uma requisicao
+   * travada no app nao pode congelar o getStreams inteiro. */
+  return withTimeout(once(), ANILIST_TIMEOUT_MS).then(function (r) {
     if (r !== null && r !== undefined) return r;
-    return once();
+    return withTimeout(once(), ANILIST_TIMEOUT_MS);
   });
 }
 
@@ -1256,8 +1285,13 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
         queries.push(extraQ[qi]);
       }
       var searchP = searchAll(queries);
+      /* Orcamento global de 20s p/ o offset AniList: se estourar, segue
+       * com offset 0 (o modo sequel falha de forma visivel no diag em
+       * vez de congelar a lista de fontes). */
       var alP = !isMovie
-        ? anilistFranchiseOffset(tmdb.titles, tmdb.year)
+        ? withTimeout(anilistFranchiseOffset(tmdb.titles, tmdb.year), 20000).then(function (r) {
+            return r || { offset: 0, entry: null };
+          })
         : Promise.resolve({ offset: 0, entry: null });
       return Promise.all([searchP, alP]).then(function (both) {
         var candidates = both[0] || [];
